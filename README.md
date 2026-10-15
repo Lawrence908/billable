@@ -1,24 +1,28 @@
 # billable
 
-https://billable.chrislawrence.ca: a start/stop timer per job, with a day summary
-that rounds each job to the nearest 0.5 h for entry into a billable-hours system.
+https://billable.chrislawrence.ca: type a client name, start and stop its timer through
+the day, and get a summary that rounds each client to the nearest 0.5 h.
 
-Public, no accounts, **no server-side data**. Jobs, time entries and settings are one
+Public, no accounts, **no server-side data**. Clients, time entries and settings are one
 JSON blob in the visitor's `localStorage` (`billable.v1`). The server is a static nginx.
 
 ## Behaviour
 
-- Starting a job stops any other running timer unless "let more than one timer run"
+- Clients persist across days, so each name is typed once. Re-adding a removed name
+  restores it with its history.
+- Starting a client stops any other running timer unless "let more than one timer run"
   is ticked in Settings.
 - Day totals are the overlap of each entry with the local calendar day, so a shift
   past midnight is split between the two days.
-- Billable = `round(hours * 2) / 2` per job (15 min rounds up to 0.5, 14 down to 0);
+- Hours = `round(hours * 2) / 2` per client (15 min rounds up to 0.5, 14 down to 0);
   the day total is the sum of the rounded figures.
-- Entries can be edited (an end before the start means past midnight), added by hand,
-  or deleted. Removing a job archives it so its past hours still appear.
+- "Fix times" (folded by default) edits, adds or deletes entries; an end before the
+  start means past midnight. Removing a client archives it so past hours still appear.
 - Email opens the visitor's own mail client via `mailto:`; nothing is sent from the
-  server, so there is no relay to abuse and no SMTP secret. Copy and CSV are alongside.
-- Export/import a JSON backup; data does not sync between devices.
+  server, so there is no relay to abuse and no SMTP secret. Copy sits alongside; a CSV
+  of the day is under Settings.
+- Export/import a JSON backup; data does not sync between devices. Data from the first
+  version (`jobs`/`jobId`, plus a job number) is read and rewritten as `clients`/`clientId`.
 
 ## Layout
 

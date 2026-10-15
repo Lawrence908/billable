@@ -1,9 +1,9 @@
-// Billable: per-job start/stop timers kept entirely in localStorage.
+// Billable: per-client start/stop timers kept entirely in localStorage.
 //
-// State is one JSON blob. A session is {id, jobId, start, end} in epoch ms,
-// with end = null while its timer runs. A day's time for a job is the overlap
-// of its sessions with that local calendar day, so a shift that crosses
-// midnight is split between the two days rather than credited to one.
+// State is one JSON blob. A session is {id, clientId, start, end} in epoch ms,
+// with end = null while its timer runs. A day's time for a client is the
+// overlap of its sessions with that local calendar day, so a stretch that
+// crosses midnight is split between the two days rather than credited to one.
 "use strict";
 
 const KEY = "billable.v1";
@@ -16,7 +16,7 @@ function uid() {
 }
 
 function blank() {
-  return { jobs: [], sessions: [], settings: { email: "", allowOverlap: false } };
+  return { clients: [], sessions: [], settings: { email: "", allowOverlap: false } };
 }
 
 function load() {
@@ -30,20 +30,22 @@ function load() {
 }
 
 // Accepts anything shaped roughly right (stored state or an imported backup)
-// and drops what is not, so one bad record cannot break the page.
+// and drops what is not, so one bad record cannot break the page. Data saved
+// by the first version used jobs/jobId; it is read the same way.
 function normalise(d) {
   const out = blank();
   if (!d || typeof d !== "object") return out;
-  if (Array.isArray(d.jobs)) {
-    out.jobs = d.jobs
-      .filter((j) => j && typeof j.id === "string" && typeof j.name === "string")
-      .map((j) => ({ id: j.id, name: j.name.slice(0, 80), code: String(j.code || "").slice(0, 40), archived: !!j.archived }));
+  const clients = d.clients || d.jobs;
+  if (Array.isArray(clients)) {
+    out.clients = clients
+      .filter((c) => c && typeof c.id === "string" && typeof c.name === "string")
+      .map((c) => ({ id: c.id, name: c.name.slice(0, 80), archived: !!c.archived }));
   }
-  const ids = new Set(out.jobs.map((j) => j.id));
+  const ids = new Set(out.clients.map((c) => c.id));
   if (Array.isArray(d.sessions)) {
     out.sessions = d.sessions
-      .filter((s) => s && ids.has(s.jobId) && Number.isFinite(s.start) && (s.end === null || Number.isFinite(s.end)))
-      .map((s) => ({ id: String(s.id || uid()), jobId: s.jobId, start: s.start, end: s.end }))
+      .map((s) => s && { id: String(s.id || uid()), clientId: s.clientId || s.jobId, start: s.start, end: s.end })
+      .filter((s) => s && ids.has(s.clientId) && Number.isFinite(s.start) && (s.end === null || Number.isFinite(s.end)))
       .filter((s) => s.end === null || s.end >= s.start);
   }
   if (d.settings && typeof d.settings === "object") {
@@ -100,12 +102,6 @@ function fmtHMS(ms) {
   return `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
-function fmtWords(ms) {
-  const m = Math.round(ms / 60e3);
-  const h = Math.floor(m / 60);
-  return h ? `${h}h ${String(m % 60).padStart(2, "0")}m` : `${m}m`;
-}
-
 // Nearest half hour. 15 minutes rounds up to 0.5, 14 down to 0.
 function roundHalf(ms) {
   return Math.round((ms / HOUR) * 2) / 2;
@@ -134,12 +130,8 @@ function prettyDay(key) {
 
 /* ---------- derived data ---------- */
 
-const jobById = (id) => state.jobs.find((j) => j.id === id);
-const running = (jobId) => state.sessions.find((s) => s.jobId === jobId && s.end === null);
-
-function jobLabel(j) {
-  return j.code ? `${j.name} (${j.code})` : j.name;
-}
+const clientById = (id) => state.clients.find((c) => c.id === id);
+const running = (clientId) => state.sessions.find((s) => s.clientId === clientId && s.end === null);
 
 function totalsFor(key, now) {
   const [from, to] = dayBounds(key);
@@ -147,7 +139,7 @@ function totalsFor(key, now) {
   for (const s of state.sessions) {
     const ms = overlap(s, from, to, now);
     if (ms > 0 || (s.end === null && s.start < to && s.start >= from)) {
-      per.set(s.jobId, (per.get(s.jobId) || 0) + ms);
+      per.set(s.clientId, (per.get(s.clientId) || 0) + ms);
     }
   }
   return per;
@@ -155,83 +147,79 @@ function totalsFor(key, now) {
 
 function summaryRows(key, now) {
   const per = totalsFor(key, now);
-  // Job list order, then any job only present in history.
-  const order = state.jobs.map((j) => j.id).filter((id) => per.has(id));
-  return order.map((id) => {
-    const ms = per.get(id);
-    return { job: jobById(id), ms, hours: roundHalf(ms) };
-  });
+  return state.clients
+    .filter((c) => per.has(c.id))
+    .map((c) => ({ client: c, ms: per.get(c.id), hours: roundHalf(per.get(c.id)) }));
 }
 
 /* ---------- actions ---------- */
 
-function addJob(name, code) {
-  name = name.trim();
+function addClient(name) {
+  name = name.trim().slice(0, 80);
   if (!name) return;
-  state.jobs.push({ id: uid(), name: name.slice(0, 80), code: code.trim().slice(0, 40), archived: false });
+  const same = state.clients.find((c) => c.name.toLowerCase() === name.toLowerCase());
+  if (same) {
+    // Re-adding a removed client brings it (and its history) back.
+    if (same.archived) {
+      same.archived = false;
+      save();
+      render();
+      toast(`${same.name} is back.`);
+    } else {
+      toast(`${same.name} is already in the list.`);
+    }
+    return;
+  }
+  state.clients.push({ id: uid(), name, archived: false });
   save();
   render();
 }
 
-function toggle(jobId) {
+function toggle(clientId) {
   const now = Date.now();
-  const live = running(jobId);
+  const live = running(clientId);
   if (live) {
     live.end = now;
   } else {
     if (!state.settings.allowOverlap) {
       for (const s of state.sessions) if (s.end === null) s.end = now;
     }
-    state.sessions.push({ id: uid(), jobId, start: now, end: null });
+    state.sessions.push({ id: uid(), clientId, start: now, end: null });
   }
   save();
   render();
 }
 
-function renameJob(jobId) {
-  const j = jobById(jobId);
-  const name = prompt("Job name", j.name);
+function renameClient(clientId) {
+  const c = clientById(clientId);
+  const name = prompt("Client name", c.name);
   if (name === null || !name.trim()) return;
-  const code = prompt("Job number (optional)", j.code);
-  j.name = name.trim().slice(0, 80);
-  if (code !== null) j.code = code.trim().slice(0, 40);
+  c.name = name.trim().slice(0, 80);
   save();
   render();
 }
 
-function archiveJob(jobId) {
-  const j = jobById(jobId);
-  const live = running(jobId);
+function archiveClient(clientId) {
+  const c = clientById(clientId);
+  const live = running(clientId);
   if (live) live.end = Date.now();
-  j.archived = true;
+  c.archived = true;
   save();
   render();
-  toast(`Removed ${j.name}. Its past hours are kept; restore it under Settings.`);
+  toast(`Removed ${c.name}. Past hours are kept; add the name again to bring it back.`);
 }
 
-function restoreJob(jobId) {
-  jobById(jobId).archived = false;
-  save();
-  render();
-}
-
-function deleteJobForever(jobId) {
-  const j = jobById(jobId);
-  if (!confirm(`Delete "${j.name}" and all of its recorded time? This cannot be undone.`)) return;
-  state.jobs = state.jobs.filter((x) => x.id !== jobId);
-  state.sessions = state.sessions.filter((s) => s.jobId !== jobId);
+function restoreClient(clientId) {
+  clientById(clientId).archived = false;
   save();
   render();
 }
 
-function moveJob(jobId, dir) {
-  const active = state.jobs.filter((j) => !j.archived);
-  const i = active.findIndex((j) => j.id === jobId);
-  const k = i + dir;
-  if (k < 0 || k >= active.length) return;
-  const a = state.jobs.indexOf(active[i]);
-  const b = state.jobs.indexOf(active[k]);
-  [state.jobs[a], state.jobs[b]] = [state.jobs[b], state.jobs[a]];
+function deleteClientForever(clientId) {
+  const c = clientById(clientId);
+  if (!confirm(`Delete "${c.name}" and all of its recorded time? This cannot be undone.`)) return;
+  state.clients = state.clients.filter((x) => x.id !== clientId);
+  state.sessions = state.sessions.filter((s) => s.clientId !== clientId);
   save();
   render();
 }
@@ -267,11 +255,11 @@ function deleteSession(id) {
   render();
 }
 
-function addEntry(jobId, startHM, endHM) {
+function addEntry(clientId, startHM, endHM) {
   const start = atTime(viewDay, startHM);
   let end = atTime(viewDay, endHM);
   if (end <= start) end += 24 * HOUR;
-  state.sessions.push({ id: uid(), jobId, start, end });
+  state.sessions.push({ id: uid(), clientId, start, end });
   save();
   render();
 }
@@ -280,22 +268,20 @@ function addEntry(jobId, startHM, endHM) {
 
 function summaryText(key) {
   const rows = summaryRows(key, Date.now());
-  const lines = [`Billable hours for ${prettyDay(key)}`, ""];
+  const lines = [`Hours for ${prettyDay(key)}`, ""];
   if (!rows.length) lines.push("No time recorded.");
-  for (const r of rows) lines.push(`${jobLabel(r.job)}: ${fmtHours(r.hours)} h`);
+  for (const r of rows) lines.push(`${r.client.name}: ${fmtHours(r.hours)} h`);
   const total = rows.reduce((a, r) => a + r.hours, 0);
-  const exact = rows.reduce((a, r) => a + r.ms, 0);
-  lines.push("", `Total: ${fmtHours(total)} h`, `(Each job rounded to the nearest 0.5 h; tracked ${fmtWords(exact)}.)`);
+  lines.push("", `Total: ${fmtHours(total)} h`, "(Rounded to the nearest 0.5 h per client.)");
   if (state.sessions.some((s) => s.end === null)) lines.push("Note: a timer was still running when this was generated.");
   return lines.join("\n");
 }
 
 function csvFor(key) {
   const q = (v) => `"${String(v).replace(/"/g, '""')}"`;
-  const rows = summaryRows(key, Date.now());
-  const out = [["date", "job", "job_number", "tracked_hours", "billable_hours"].join(",")];
-  for (const r of rows) {
-    out.push([key, q(r.job.name), q(r.job.code), (r.ms / HOUR).toFixed(2), fmtHours(r.hours)].join(","));
+  const out = ["date,client,tracked_hours,hours"];
+  for (const r of summaryRows(key, Date.now())) {
+    out.push([key, q(r.client.name), (r.ms / HOUR).toFixed(2), fmtHours(r.hours)].join(","));
   }
   return out.join("\r\n") + "\r\n";
 }
@@ -334,41 +320,36 @@ function el(tag, props = {}, ...kids) {
   return n;
 }
 
-function renderJobs(now) {
-  const list = $("jobs");
-  const today = dayKey(now);
-  const per = totalsFor(today, now);
-  const active = state.jobs.filter((j) => !j.archived);
+function renderClients(now) {
+  const list = $("clients");
+  const per = totalsFor(dayKey(now), now);
+  const active = state.clients.filter((c) => !c.archived);
   list.replaceChildren();
-  $("jobs-empty").hidden = active.length > 0;
+  $("clients-empty").hidden = active.length > 0;
 
-  active.forEach((j, i) => {
-    const live = running(j.id);
-    const ms = per.get(j.id) || 0;
+  for (const c of active) {
+    const live = running(c.id);
+    const ms = per.get(c.id) || 0;
     const meta = live
-      ? el("div", { class: "job-meta" }, el("span", { class: "pulse", "aria-hidden": "true" }), `Running since ${clock(live.start)}`)
-      : el("div", { class: "job-meta", text: ms ? `${fmtHours(roundHalf(ms))} h billable today` : "Not started today" });
+      ? el("div", { class: "client-meta" }, el("span", { class: "pulse", "aria-hidden": "true" }), `Running since ${clock(live.start)}`)
+      : el("div", { class: "client-meta", text: ms ? `${fmtHours(roundHalf(ms))} h today` : "Not started today" });
 
     list.append(
-      el("li", { class: "job" + (live ? " running" : ""), "data-job": j.id },
-        el("div", {},
-          el("div", { class: "job-name", text: j.name }, j.code ? el("span", { class: "job-code", text: `  #${j.code}` }) : null),
-          meta),
-        el("div", { class: "job-time digits", "data-live": j.id, text: live ? fmtHMS(ms) : fmtHM(ms) }),
+      el("li", { class: "client" + (live ? " running" : "") },
+        el("div", {}, el("div", { class: "client-name", text: c.name }), meta),
+        el("div", { class: "client-time digits", "data-live": c.id, text: live ? fmtHMS(ms) : fmtHM(ms) }),
         el("button", {
           type: "button",
           class: "btn toggle " + (live ? "stop" : "start"),
-          "aria-label": `${live ? "Stop" : "Start"} ${j.name}`,
-          onclick: () => toggle(j.id),
+          "aria-label": `${live ? "Stop" : "Start"} ${c.name}`,
+          onclick: () => toggle(c.id),
           text: live ? "Stop" : "Start",
         }),
-        el("div", { class: "job-tools" },
-          i > 0 ? el("button", { type: "button", class: "btn", "aria-label": `Move ${j.name} up`, onclick: () => moveJob(j.id, -1), text: "↑" }) : null,
-          i < active.length - 1 ? el("button", { type: "button", class: "btn", "aria-label": `Move ${j.name} down`, onclick: () => moveJob(j.id, 1), text: "↓" }) : null,
-          el("button", { type: "button", class: "btn", onclick: () => renameJob(j.id), text: "Rename" }),
-          el("button", { type: "button", class: "btn", onclick: () => archiveJob(j.id), text: "Remove" })))
+        el("div", { class: "client-tools" },
+          el("button", { type: "button", class: "btn", onclick: () => renameClient(c.id), text: "Rename" }),
+          el("button", { type: "button", class: "btn", onclick: () => archiveClient(c.id), text: "Remove" })))
     );
-  });
+  }
 }
 
 function renderSummary(now) {
@@ -381,8 +362,8 @@ function renderSummary(now) {
   for (const r of rows) {
     body.append(
       el("tr", {},
-        el("td", {}, r.job.name, r.job.code ? el("span", { class: "code", text: `#${r.job.code}` }) : null,
-          running(r.job.id) ? el("span", { class: "pulse", style: "margin-left:.5em", title: "Timer running" }) : null),
+        el("td", {}, r.client.name,
+          running(r.client.id) ? el("span", { class: "pulse", style: "margin-left:.5em", title: "Timer running" }) : null),
         el("td", { class: "num", text: fmtHM(r.ms) }),
         el("td", { class: "num billable", text: fmtHours(r.hours) }))
     );
@@ -401,11 +382,11 @@ function renderLog(now) {
   $("log-empty").hidden = entries.length > 0;
 
   for (const s of entries) {
-    const j = jobById(s.jobId);
+    const c = clientById(s.clientId);
     const ms = (s.end === null ? now : s.end) - s.start;
     log.append(
       el("li", { class: "entry" },
-        el("span", { class: "entry-job", title: jobLabel(j) }, j.name + (j.archived ? " (removed)" : ""),
+        el("span", { class: "entry-client", title: c.name }, c.name + (c.archived ? " (removed)" : ""),
           s.start < from ? el("small", { text: " · from previous day" }) : null,
           s.end !== null && s.end > to ? el("small", { text: " · into next day" }) : null),
         el("input", { type: "time", value: clock(s.start), "aria-label": "Start time", onchange: (e) => editSession(s.id, "start", e.target.value) }),
@@ -418,27 +399,26 @@ function renderLog(now) {
     );
   }
 
-  const sel = $("entry-job");
+  const sel = $("entry-client");
   const keep = sel.value;
-  sel.replaceChildren(el("option", { value: "", text: "Job…", disabled: true, selected: true }));
-  for (const j of state.jobs.filter((x) => !x.archived)) sel.append(el("option", { value: j.id, text: jobLabel(j) }));
-  if (keep && jobById(keep) && !jobById(keep).archived) sel.value = keep;
+  sel.replaceChildren(el("option", { value: "", text: "Client…", disabled: true, selected: true }));
+  for (const c of state.clients.filter((x) => !x.archived)) sel.append(el("option", { value: c.id, text: c.name }));
+  if (keep && clientById(keep) && !clientById(keep).archived) sel.value = keep;
 }
 
 function renderSettings() {
   $("allow-overlap").checked = state.settings.allowOverlap;
   if (document.activeElement !== $("email-to")) $("email-to").value = state.settings.email;
-  const gone = state.jobs.filter((j) => j.archived);
-  $("archived-count").textContent = gone.length;
+  const gone = state.clients.filter((c) => c.archived);
   $("archived-wrap").hidden = gone.length === 0;
   const ul = $("archived");
   ul.replaceChildren();
-  for (const j of gone) {
+  for (const c of gone) {
     ul.append(
       el("li", {},
-        el("span", { text: jobLabel(j) }),
-        el("button", { type: "button", class: "btn btn-small", onclick: () => restoreJob(j.id), text: "Restore" }),
-        el("button", { type: "button", class: "btn btn-small btn-danger", onclick: () => deleteJobForever(j.id), text: "Delete" }))
+        el("span", { text: c.name }),
+        el("button", { type: "button", class: "btn btn-small", onclick: () => restoreClient(c.id), text: "Restore" }),
+        el("button", { type: "button", class: "btn btn-small btn-danger", onclick: () => deleteClientForever(c.id), text: "Delete" }))
     );
   }
 }
@@ -452,13 +432,13 @@ function renderHeader(now) {
   $("day-pick").max = today;
   $("day-next").disabled = viewDay >= today;
   const anyLive = state.sessions.some((s) => s.end === null);
-  document.title = anyLive ? `● ${fmtHM(total)} · Billable` : "Billable · hours per job";
+  document.title = anyLive ? `● ${fmtHM(total)} · Billable` : "Billable · hours per client";
 }
 
 function render() {
   const now = Date.now();
   renderHeader(now);
-  renderJobs(now);
+  renderClients(now);
   renderSummary(now);
   renderLog(now);
   renderSettings();
@@ -498,12 +478,11 @@ function tick() {
 
 /* ---------- wiring ---------- */
 
-$("add-job").addEventListener("submit", (e) => {
+$("add-client").addEventListener("submit", (e) => {
   e.preventDefault();
-  addJob($("job-name").value, $("job-code").value);
-  $("job-name").value = "";
-  $("job-code").value = "";
-  $("job-name").focus();
+  addClient($("client-name").value);
+  $("client-name").value = "";
+  $("client-name").focus();
 });
 
 $("day-prev").addEventListener("click", () => { viewDay = shiftDay(viewDay, -1); render(); });
@@ -521,7 +500,7 @@ $("email-to").addEventListener("change", (e) => {
 $("email-btn").addEventListener("click", () => {
   state.settings.email = $("email-to").value.trim();
   save();
-  const subject = `Billable hours ${viewDay}`;
+  const subject = `Hours ${viewDay}`;
   const to = state.settings.email.split(/[,;\s]+/).filter(Boolean).map(encodeURIComponent).join(",");
   location.href = `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(summaryText(viewDay))}`;
 });
@@ -547,11 +526,11 @@ $("csv-btn").addEventListener("click", () => download(`billable-${viewDay}.csv`,
 
 $("add-entry").addEventListener("submit", (e) => {
   e.preventDefault();
-  const job = $("entry-job").value;
+  const client = $("entry-client").value;
   const a = $("entry-start").value;
   const b = $("entry-end").value;
-  if (!job || !a || !b) return toast("Pick a job and both times.");
-  addEntry(job, a, b);
+  if (!client || !a || !b) return toast("Pick a client and both times.");
+  addEntry(client, a, b);
   $("entry-start").value = "";
   $("entry-end").value = "";
 });
@@ -570,8 +549,8 @@ $("import-file").addEventListener("change", async (e) => {
   if (!file) return;
   try {
     const incoming = normalise(JSON.parse(await file.text()));
-    if (!incoming.jobs.length) return toast("That file has no jobs in it.");
-    if (!confirm(`Replace what is in this browser with ${incoming.jobs.length} job(s) and ${incoming.sessions.length} time entries from the backup?`)) return;
+    if (!incoming.clients.length) return toast("That file has no clients in it.");
+    if (!confirm(`Replace what is in this browser with ${incoming.clients.length} client(s) and ${incoming.sessions.length} time entries from the backup?`)) return;
     state = incoming;
     save();
     render();
@@ -582,7 +561,7 @@ $("import-file").addEventListener("change", async (e) => {
 });
 
 $("wipe-btn").addEventListener("click", () => {
-  if (!confirm("Erase every job and time entry stored in this browser?")) return;
+  if (!confirm("Erase every client and time entry stored in this browser?")) return;
   state = blank();
   save();
   render();
