@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Billable · hours per job</title>
+<meta name="description" content="Start and stop a timer per job, then get the day's hours rounded to the nearest half hour. Everything stays in your browser.">
+<meta name="theme-color" content="#16181c">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/app.css?v=__BUILD_ID__">
+<link rel="stylesheet" href="/shared-footer/footer.css">
+</head>
+<body>
+<header class="masthead">
+  <div class="wrap masthead-row">
+    <div>
+      <h1>Billable</h1>
+      <p class="sub" id="today-label"></p>
+    </div>
+    <div class="today-total">
+      <span class="label">Today</span>
+      <span class="digits" id="today-total">0:00</span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section aria-labelledby="jobs-h">
+    <h2 id="jobs-h" class="section-h">Jobs</h2>
+    <form id="add-job" class="add-job" autocomplete="off">
+      <input id="job-name" name="name" type="text" placeholder="Job name" maxlength="80" required aria-label="Job name">
+      <input id="job-code" name="code" type="text" placeholder="Job # (optional)" maxlength="40" aria-label="Job number">
+      <button type="submit" class="btn btn-primary">Add job</button>
+    </form>
+    <p class="empty" id="jobs-empty">Add the jobs you work on. Each one gets its own start and stop button.</p>
+    <ul class="jobs" id="jobs"></ul>
+  </section>
+
+  <section aria-labelledby="summary-h" class="panel">
+    <div class="panel-head">
+      <h2 id="summary-h" class="section-h">Day summary</h2>
+      <div class="day-nav">
+        <button type="button" class="btn btn-ghost" id="day-prev" aria-label="Previous day">&larr;</button>
+        <input type="date" id="day-pick" aria-label="Summary date">
+        <button type="button" class="btn btn-ghost" id="day-next" aria-label="Next day">&rarr;</button>
+        <button type="button" class="btn btn-ghost" id="day-today">Today</button>
+      </div>
+    </div>
+    <table class="summary" id="summary">
+      <thead><tr><th>Job</th><th class="num">Tracked</th><th class="num">Billable</th></tr></thead>
+      <tbody></tbody>
+      <tfoot><tr><th>Total</th><th class="num" id="sum-exact">0:00</th><th class="num" id="sum-rounded">0.0</th></tr></tfoot>
+    </table>
+    <p class="note">Billable hours round each job to the nearest 0.5 h. The total is the sum of the rounded figures, so it matches what you enter at work.</p>
+
+    <div class="send">
+      <label for="email-to" class="label">Email to</label>
+      <div class="send-row">
+        <input id="email-to" type="email" placeholder="you@work.com (remembered)" autocomplete="email">
+        <button type="button" class="btn btn-primary" id="email-btn">Email summary</button>
+        <button type="button" class="btn" id="copy-btn">Copy</button>
+        <button type="button" class="btn" id="csv-btn">CSV</button>
+      </div>
+      <p class="note">Email opens your own mail app with the summary filled in. Nothing is sent from this site.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="log-h" class="panel">
+    <h2 id="log-h" class="section-h">Time entries for this day</h2>
+    <p class="note">Forgot to press stop? Fix the times here. An end time earlier than the start counts as past midnight.</p>
+    <ul class="log" id="log"></ul>
+    <p class="empty" id="log-empty">No entries on this day.</p>
+    <form id="add-entry" class="add-entry" autocomplete="off">
+      <select id="entry-job" aria-label="Job" required></select>
+      <input id="entry-start" type="time" aria-label="Start time" required>
+      <span class="dash">to</span>
+      <input id="entry-end" type="time" aria-label="End time" required>
+      <button type="submit" class="btn">Add entry</button>
+    </form>
+  </section>
+
+  <section class="panel settings" aria-labelledby="settings-h">
+    <h2 id="settings-h" class="section-h">Settings and data</h2>
+    <label class="check">
+      <input type="checkbox" id="allow-overlap">
+      Let more than one timer run at once (off: starting a job stops the others)
+    </label>
+    <details id="archived-wrap">
+      <summary>Removed jobs (<span id="archived-count">0</span>)</summary>
+      <ul class="archived" id="archived"></ul>
+    </details>
+    <p class="note">Your jobs and times live only in this browser's local storage. There is no account and no server copy, so they will not follow you to another device, and clearing site data erases them. Export a backup if they matter.</p>
+    <div class="send-row">
+      <button type="button" class="btn" id="export-btn">Export backup</button>
+      <label class="btn" for="import-file">Import backup</label>
+      <input type="file" id="import-file" accept="application/json,.json" hidden>
+      <button type="button" class="btn btn-danger" id="wipe-btn">Erase everything</button>
+    </div>
+  </section>
+
+  <p class="build">build __BUILD_TIME__</p>
+</main>
+
+<footer class="chrislawrence-footer">
+  <a href="https://chrislawrence.ca" class="footer-home-link" aria-label="Back to chrislawrence.ca">
+    <img src="/shared-footer/logo-portrait.png" alt="Chris Lawrence" class="footer-logo"
+         width="32" height="32" loading="lazy" onerror="this.remove()">
+    <span class="footer-home-link-text">Back to chrislawrence.ca</span>
+  </a>
+</footer>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="/app.js?v=__BUILD_ID__"></script>
+</body>
+</html>

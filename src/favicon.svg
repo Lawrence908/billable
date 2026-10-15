@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <title>billable</title>
+  <rect width="64" height="64" rx="13" fill="#16181c"/>
+  <g fill="none" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="32" cy="36" r="17" stroke="#f0b23e"/>
+  <path d="M32 36V27" stroke="#e8e4da"/>
+  <path d="M27 10h10" stroke="#f0b23e"/>
+  </g>
+</svg>
