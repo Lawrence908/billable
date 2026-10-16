@@ -31,12 +31,13 @@ next one started on that card, are labelled with them.
 
 ## Day-to-day helpers
 
-- **Copy for Sheets** puts the day on the clipboard as tab-separated rows, so pasting
-  into a Google Sheet fills one row per summary line with each value in its own
-  column. A setting chooses between Notes and Hours, or all five work-timesheet columns
-  (Date, Employee, Costing section, Notes, Hours). The sheet has no client column, so
-  the client leads the Notes cell. Lines that round to 0.00 h are left out, and cells
-  that start like a formula are kept as text.
+- **Copy for Sheets**: each client in the summary has a copy button, because each
+  client's hours go on its own tab of the work Google Sheet. It copies that client's
+  lines as tab-separated rows, so one paste fills a row per line with each value in its
+  own column. A setting chooses Notes and Hours (Notes then carries the category, such
+  as "P3 · Framing review"), or all five timesheet columns (Date, Employee, Costing
+  section, Notes, Hours). A tick marks clients already copied, and clears if their time
+  changes afterwards. Zero-hour lines are left out, and formula-like cells stay text.
 - **Forgotten timers**: a timer still running from a previous day, or for four hours or
   more, raises a prompt to stop it at the time you actually finished, stop now, or keep
   going (which quiets it for two hours).

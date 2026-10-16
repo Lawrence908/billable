@@ -71,18 +71,17 @@
       </div>
     </div>
     <table class="summary" id="summary">
-      <thead><tr><th>Client</th><th class="num">Tracked</th><th class="num">Hours</th></tr></thead>
+      <thead><tr><th>Client</th><th class="num">Tracked</th><th class="num">Hours</th><th class="copy-col"><span class="visually-hidden">Copy for Sheets</span></th></tr></thead>
       <tbody></tbody>
-      <tfoot><tr><th>Total</th><th class="num" id="sum-exact">0:00</th><th class="num" id="sum-rounded">0.00</th></tr></tfoot>
+      <tfoot><tr><th>Total</th><th class="num" id="sum-exact">0:00</th><th class="num" id="sum-rounded">0.00</th><th></th></tr></tfoot>
     </table>
     <p class="note">Each line's time for the day is added up, then rounded to the nearest 0.25 h. A client tracked with categories gets one line per category and note.</p>
 
     <div class="send">
-      <div class="send-row">
-        <button type="button" class="btn btn-primary" id="sheet-btn">Copy for Sheets</button>
-        <button type="button" class="btn" id="copy-btn">Copy as text</button>
-      </div>
       <p class="note" id="sheet-note"></p>
+      <div class="send-row">
+        <button type="button" class="btn" id="copy-btn">Copy whole day as text</button>
+      </div>
       <div class="send-row email-row">
         <input id="email-to" type="email" placeholder="Email to" autocomplete="email" aria-label="Email to">
         <button type="button" class="btn" id="email-btn">Email</button>
@@ -196,7 +195,7 @@
       <label class="check"><input type="radio" name="sheet-layout" value="notes-hours"> Notes and Hours</label>
       <label class="check"><input type="radio" name="sheet-layout" value="all"> All five columns: Date, Employee, Costing section, Notes, Hours</label>
       <input id="employee" type="text" maxlength="80" autocomplete="name" placeholder="Your full name, exactly as in the sheet's Employee list" aria-label="Employee name for the sheet">
-      <p class="note">Costing section uses the category name (P3, Gaps and so on). Lines that round to 0.00 h are left out.</p>
+      <p class="note">With Notes and Hours, the Notes cell carries the category too (P3 · Framing review), so you can pick the Costing section after pasting. With all five, Costing section gets the category name and Notes just the note. Lines that round to 0.00 h are left out.</p>
     </fieldset>
     <div id="archived-wrap">
       <p class="label">Removed clients</p>

@@ -309,15 +309,20 @@ function sheetDay(settings) {
   })];
 }
 
-test("Copy for Sheets defaults to Notes and Hours, client leading the note, zero lines dropped", () => {
+test("Copy for Sheets copies one client: Notes and Hours by default, zero lines dropped", () => {
   const [k, st] = sheetDay({});
-  assert.deepEqual(sheetRows(st, k, 0), [["Acme Corp · Framing review", "1.75"], ["Acme Corp", "0.50"], ["Northwind", "0.75"]]);
+  assert.deepEqual(sheetRows(st, k, 0, "a"), [["P3 · Framing review", "1.75"], ["Gaps", "0.50"]]);
+  assert.deepEqual(sheetRows(st, k, 0, "b"), [["", "0.75"]]);
+  assert.deepEqual(sheetRows(st, k, 0, "nobody"), []);
 });
 
 test("the all-columns layout follows the sheet: Date, Employee, Costing section, Notes, Hours", () => {
   const [k, st] = sheetDay({ sheetLayout: "all", employee: "Chris Lawrence" });
-  assert.deepEqual(sheetRows(st, k, 0)[0], ["10/16/2026", "Chris Lawrence", "P3", "Acme Corp · Framing review", "1.75"]);
-  assert.deepEqual(sheetRows(st, k, 0)[2], ["10/16/2026", "Chris Lawrence", "", "Northwind", "0.75"]);
+  assert.deepEqual(sheetRows(st, k, 0, "a"), [
+    ["10/16/2026", "Chris Lawrence", "P3", "Framing review", "1.75"],
+    ["10/16/2026", "Chris Lawrence", "Gaps", "", "0.50"],
+  ]);
+  assert.deepEqual(sheetRows(st, k, 0, "b"), [["10/16/2026", "Chris Lawrence", "", "", "0.75"]]);
 });
 
 test("TSV keeps cells intact and stops Sheets reading text as a formula", () => {

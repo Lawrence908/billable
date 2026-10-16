@@ -19,6 +19,7 @@ const EXPANDED_KEY = "billable.expanded"; // which cards show their detail panel
 const SUMMARY_OPEN_KEY = "billable.summary-open"; // the summary starts minimized until opened
 const TIMELINE_OPEN_KEY = "billable.timeline-open"; // the timeline starts open
 const SNOOZE_KEY = "billable.nudge-snooze"; // session id -> time until which its nudge stays quiet
+const COPIED_KEY = "billable.sheet-copied"; // day -> { client id: what was copied }, for the ticks
 const BUILD = document.querySelector('meta[name="build"]').content;
 const TRANSFER_MAX = 1400; // link characters; beyond this a QR code is hard to scan off a screen
 
@@ -254,6 +255,54 @@ function stopForgotten(sessionId, end) {
   toast(`Stopped at ${clock(s.end)}.`);
 }
 
+/* ---------- copy for sheets ---------- */
+
+// Remembers what was copied for each client, so the summary can tick off the
+// tabs already done. A tick only shows while the client's rows still match
+// what was copied, so editing time afterwards brings the copy button back.
+const copied = (() => {
+  try {
+    return JSON.parse(storage.get(COPIED_KEY) || "{}");
+  } catch {
+    return {};
+  }
+})();
+
+const isCopied = (clientId, tsv) => copied[viewDay]?.[clientId] === tsv;
+
+async function copyClient(clientId) {
+  const rows = sheetRows(state, viewDay, Date.now(), clientId);
+  const name = clientById(state, clientId).name;
+  if (!rows.length) return toast(`Nothing over 0.00 h to copy for ${name}.`);
+  const tsv = toTSV(rows);
+  if (!(await copyText(tsv))) return;
+  if (state.settings.sheetLayout === "all" && !state.settings.employee) toast(`${name} copied. Add your name in Settings to fill the Employee column.`);
+  else toast(`${name}: ${plural(rows.length, "row", "rows")} copied. Paste into its sheet.`);
+  // Keep a week of days; older ticks are of no use.
+  const cutoff = shiftDay(dayKey(Date.now()), -7);
+  for (const day of Object.keys(copied)) if (day < cutoff) delete copied[day];
+  copied[viewDay] = { ...copied[viewDay], [clientId]: tsv };
+  storage.set(COPIED_KEY, JSON.stringify(copied));
+  renderSummary(Date.now());
+}
+
+const COPY_ICON = "M9 9h10v10H9zM5 15V5h10";
+const DONE_ICON = "M5 12.5l4.5 4.5L19 7.5";
+function icon(d) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", d);
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "2");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("stroke-linecap", "round");
+  svg.append(path);
+  return svg;
+}
+
 /* ---------- sync wiring ---------- */
 
 let sync = null;      // { v, phrase, access, key } from storage, or null
@@ -416,10 +465,12 @@ function download(name, text, type) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+// Returns whether the copy worked. Toasts itself only when given a label.
 async function copyText(text, what) {
   try {
     await navigator.clipboard.writeText(text);
-    toast(`${what} copied.`);
+    if (what) toast(`${what} copied.`);
+    return true;
   } catch {
     // The Clipboard API needs permission; fall back to a selection copy.
     const ta = el("textarea", { class: "offscreen" });
@@ -428,7 +479,9 @@ async function copyText(text, what) {
     ta.select();
     const ok = document.execCommand("copy");
     ta.remove();
-    toast(ok ? `${what} copied.` : "Copy failed; your browser blocked it.");
+    if (!ok) toast("Copy failed; your browser blocked it.");
+    else if (what) toast(`${what} copied.`);
+    return ok;
   }
 }
 
@@ -671,19 +724,28 @@ function renderSummary(now) {
   const rows = summaryRows(state, viewDay, now);
   const body = $("summary").tBodies[0];
   if (!rows.length) {
-    body.replaceChildren(el("tr", { class: "none" }, el("td", { colspan: "3", text: "No time recorded on this day." })));
+    body.replaceChildren(el("tr", { class: "none" }, el("td", { colspan: "4", text: "No time recorded on this day." })));
   } else {
-    body.replaceChildren(...rows.flatMap((r) => [
-      el("tr", { class: r.detailed ? "client-row detailed" : "client-row" },
-        el("td", {}, r.client.name,
-          runningFor(state, r.client.id) ? el("span", { class: "pulse trailing", title: "Timer running" }) : null),
-        el("td", { class: "num", text: fmtHM(r.ms) }),
-        el("td", { class: "num billable", text: fmtHours(r.hours) })),
-      ...(r.detailed ? r.lines.map((l) => el("tr", { class: "line-row" },
-        el("td", { text: l.label }),
-        el("td", { class: "num", text: fmtHM(l.ms) }),
-        el("td", { class: "num", text: fmtHours(l.hours) }))) : []),
-    ]));
+    body.replaceChildren(...rows.flatMap((r) => {
+      const sheet = sheetRows(state, viewDay, now, r.client.id);
+      const done = sheet.length > 0 && isCopied(r.client.id, toTSV(sheet));
+      const copyLabel = done ? `${r.client.name} copied for Sheets. Copy again` : `Copy ${r.client.name} for Sheets`;
+      return [
+        el("tr", { class: r.detailed ? "client-row detailed" : "client-row" },
+          el("td", {}, r.client.name,
+            runningFor(state, r.client.id) ? el("span", { class: "pulse trailing", title: "Timer running" }) : null),
+          el("td", { class: "num", text: fmtHM(r.ms) }),
+          el("td", { class: "num billable", text: fmtHours(r.hours) }),
+          el("td", { class: "copy" }, sheet.length
+            ? el("button", { type: "button", class: `copy-btn${done ? " done" : ""}`, title: copyLabel, "aria-label": copyLabel, onclick: () => copyClient(r.client.id) }, icon(done ? DONE_ICON : COPY_ICON))
+            : null)),
+        ...(r.detailed ? r.lines.map((l) => el("tr", { class: "line-row" },
+          el("td", { text: l.label }),
+          el("td", { class: "num", text: fmtHM(l.ms) }),
+          el("td", { class: "num", text: fmtHours(l.hours) }),
+          el("td"))) : []),
+      ];
+    }));
   }
   const total = fmtHours(rows.reduce((a, r) => a + r.hours, 0));
   $("sum-exact").textContent = fmtHM(rows.reduce((a, r) => a + r.ms, 0));
@@ -738,8 +800,8 @@ function renderSettings() {
   if (document.activeElement !== $("employee")) $("employee").value = state.settings.employee;
   $("employee").hidden = state.settings.sheetLayout !== "all";
   $("sheet-note").textContent = state.settings.sheetLayout === "all"
-    ? "Pastes Date, Employee, Costing section, Notes and Hours. Click the first Date cell in your sheet, then paste."
-    : "Pastes Notes and Hours. Click the first Notes cell in your sheet, then paste.";
+    ? "Copy a client with its button, open that client's sheet, click the first empty Date cell and paste."
+    : "Copy a client with its button, open that client's sheet, click the first empty Notes cell and paste.";
   if (document.activeElement !== $("email-to")) $("email-to").value = state.settings.email;
   const removed = existingClients(state).filter((c) => c.archived);
   $("archived-wrap").hidden = removed.length === 0;
@@ -902,12 +964,6 @@ $("email-btn").addEventListener("click", () => {
   location.href = `mailto:${to}?subject=${subject}&body=${encodeURIComponent(summaryText(state, viewDay, Date.now()))}`;
 });
 $("copy-btn").addEventListener("click", () => copyText(summaryText(state, viewDay, Date.now()), "Summary"));
-$("sheet-btn").addEventListener("click", () => {
-  const rows = sheetRows(state, viewDay, Date.now());
-  if (!rows.length) return toast("Nothing to copy for this day.");
-  if (state.settings.sheetLayout === "all" && !state.settings.employee) toast("Tip: add your name under Settings to fill the Employee column.");
-  copyText(toTSV(rows), `${plural(rows.length, "row", "rows")}`);
-});
 for (const r of document.querySelectorAll('input[name="sheet-layout"]')) {
   r.addEventListener("change", (e) => {
     setSetting("sheetLayout", e.target.value);

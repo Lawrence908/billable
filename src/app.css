@@ -247,6 +247,23 @@ input:focus-visible, select:focus-visible, .btn:focus-visible {
 .summary tfoot th { border-bottom: 0; padding-top: 0.75rem; }
 .summary tfoot #sum-rounded { color: var(--accent); font-size: 1.25rem; }
 .summary .none td { color: var(--muted); text-align: center; }
+.summary .copy-col, .summary td.copy { width: 2.4rem; padding-left: 0.2rem; padding-right: 0; text-align: right; }
+.copy-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+}
+.copy-btn:hover { color: var(--ink); border-color: #4a515b; }
+.copy-btn svg { width: 1rem; height: 1rem; }
+.copy-btn.done { color: var(--run); border-color: rgba(79, 211, 154, 0.5); background: var(--run-dim); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .summary .client-row.detailed td { border-bottom-color: transparent; padding-bottom: 0.2rem; }
 .summary .line-row td { padding-top: 0.2rem; padding-bottom: 0.35rem; font-size: 0.86rem; color: var(--muted); border-bottom-color: transparent; }
 .summary .line-row td:first-child { padding-left: 1.2rem; }

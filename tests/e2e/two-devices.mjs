@@ -244,12 +244,19 @@ try {
   await G.p.screenshot({ path: new URL("../../screenshots/timeline-390.png", import.meta.url).pathname });
 
   await G.p.click("#summary-wrap > summary");
-  await G.p.click("#sheet-btn");
+  await G.p.click('button[aria-label="Copy Acme Corp for Sheets"]');
   await G.p.waitForTimeout(200);
   const tsv = await G.p.evaluate(() => navigator.clipboard.readText());
   const today = await G.p.evaluate(() => { const d = new Date(); return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}/${d.getFullYear()}`; });
-  check("Copy for Sheets puts tab-separated rows in the sheet's column order",
-    tsv.split("\n")[0] === `${today}\tChris Lawrence\tP3\tAcme Corp · Framing review\t1.75` && tsv.split("\n").length === 3, JSON.stringify(tsv.split("\n")[0]));
+  check("a client's copy button copies just that client, in the sheet's column order",
+    tsv === `${today}\tChris Lawrence\tP3\tFraming review\t1.75\n${today}\tChris Lawrence\tGaps\t\t0.50`, JSON.stringify(tsv));
+  check("a copied client is ticked off", await G.p.$eval('#summary .client-row:has-text("Acme Corp") .copy-btn', (b) => b.classList.contains("done")));
+  await seed(() => {
+    const s = JSON.parse(localStorage.getItem("billable.v1"));
+    s.sessions.find((x) => x.id === "3").end += 30 * 60e3;
+    localStorage.setItem("billable.v1", JSON.stringify(s));
+  });
+  check("changing that client's time clears the tick", !(await G.p.$eval('#summary .client-row:has-text("Acme Corp") .copy-btn', (b) => b.classList.contains("done"))));
 
   await G.p.waitForFunction(() => navigator.serviceWorker?.controller, null, { timeout: 10000 }).catch(() => {});
   if (!(await G.p.evaluate(() => !!navigator.serviceWorker.controller))) await G.p.reload();
