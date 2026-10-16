@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   atTime, csvFor, dayBounds, dayKey, endAfter, existingSessions, fmtHM, merge, normalise,
-  noteSuggestions, pruneTombstones, retagClient, retagSession, roundHalf, sameData, settleRunning, shiftDay,
+  noteSuggestions, pruneTombstones, retagClient, retagSession, roundQuarter, sameData, settleRunning, shiftDay,
   summaryRows, summaryText, toggleTimer, totalsFor,
 } from "../src/js/model.js";
 
@@ -20,13 +20,22 @@ function day(clients, sessions, settings = {}) {
   });
 }
 
-test("roundHalf rounds to the nearest half hour, 15 minutes rounding up", () => {
-  assert.equal(roundHalf(14 * MIN), 0);
-  assert.equal(roundHalf(15 * MIN), 0.5);
-  assert.equal(roundHalf(44 * MIN), 0.5);
-  assert.equal(roundHalf(45 * MIN), 1);
-  assert.equal(roundHalf(4 * HOUR + 44 * MIN), 4.5);
-  assert.equal(roundHalf(0), 0);
+test("roundQuarter rounds to the nearest quarter hour, 7.5 minutes rounding up", () => {
+  assert.equal(roundQuarter(0), 0);
+  assert.equal(roundQuarter(7 * MIN), 0);
+  assert.equal(roundQuarter(7.5 * MIN), 0.25);
+  assert.equal(roundQuarter(8 * MIN), 0.25);
+  assert.equal(roundQuarter(22 * MIN), 0.25);
+  assert.equal(roundQuarter(22.5 * MIN), 0.5);
+  assert.equal(roundQuarter(24 * MIN), 0.5);
+  assert.equal(roundQuarter(4 * HOUR + 44 * MIN), 4.75);
+});
+
+test("a line is totalled before rounding, so short bursts are neither lost nor inflated", () => {
+  const k = "2026-10-15";
+  // Three 8-minute stretches: 24 minutes, 0.5 h. Rounding each would give 0.75 h.
+  const st = day([["a", "Acme"]], [8, 9, 10].map((h, i) => [String(i), "a", at(k, `${h}:00`), at(k, `${h}:08`)]));
+  assert.equal(summaryRows(st, k, 0)[0].hours, 0.5);
 });
 
 test("fmtHM truncates to whole minutes", () => {
@@ -68,12 +77,12 @@ test("summary rounds per client and totals the rounded figures", () => {
     [["1", "a", at(k, "08:00"), at(k, "10:10")], ["2", "b", at(k, "10:15"), at(k, "10:35")]],
   );
   const rows = summaryRows(st, k, 0);
-  assert.deepEqual(rows.map((r) => [r.client.name, r.hours]), [["Acme", 2], ["Northwind", 0.5]]);
+  assert.deepEqual(rows.map((r) => [r.client.name, r.hours]), [["Acme", 2.25], ["Northwind", 0.25]]);
   const text = summaryText(st, k, 0);
-  assert.match(text, /Acme: 2\.0 h/);
-  assert.match(text, /Northwind: 0\.5 h/);
-  assert.match(text, /Total: 2\.5 h/);
-  assert.equal(csvFor(st, k, 0).split("\r\n")[1], `${k},"Acme","","",2.17,2.0`);
+  assert.match(text, /Acme: 2\.25 h/);
+  assert.match(text, /Northwind: 0\.25 h/);
+  assert.match(text, /Total: 2\.50 h/);
+  assert.equal(csvFor(st, k, 0).split("\r\n")[1], `${k},"Acme","","",2.17,2.25`);
 });
 
 test("CSV neutralises names a spreadsheet would run as a formula", () => {
@@ -116,7 +125,7 @@ test("merge collapses same-named clients into the oldest one", () => {
 test("CSV quotes client names that contain quotes and commas", () => {
   const k = "2026-10-15";
   const st = day([["a", 'Smith, "Jr" & Co']], [["1", "a", at(k, "08:00"), at(k, "09:00")]]);
-  assert.equal(csvFor(st, k, 0).split("\r\n")[1], `${k},"Smith, ""Jr"" & Co","","",1.00,1.0`);
+  assert.equal(csvFor(st, k, 0).split("\r\n")[1], `${k},"Smith, ""Jr"" & Co","","",1.00,1.00`);
 });
 
 test("normalise reads the first version's jobs/jobId shape and drops junk", () => {
@@ -240,7 +249,7 @@ test("a past entry can be retagged", () => {
   assert.deepEqual([st.sessions[0].category, st.sessions[0].note, st.sessions[0].updated], ["pm", "Weekly call", 50]);
 });
 
-test("summary rounds each category + note line, and the client total sums the lines", () => {
+test("summary rounds each category + note line once, and the client total sums the lines", () => {
   const k = "2026-10-15";
   const st = normalise({
     clients: [{ id: "a", name: "Acme", updated: 1 }, { id: "b", name: "Beta", updated: 1 }],
@@ -254,18 +263,18 @@ test("summary rounds each category + note line, and the client total sums the li
   });
   const [acme, beta] = summaryRows(st, k, 0);
   assert.deepEqual(acme.lines.map((l) => [l.label, fmtHM(l.ms), l.hours]),
-    [["P3 · Framing review", "1:50", 2], ["Gaps", "1:20", 1.5], ["No category", "0:10", 0]]);
-  assert.equal(acme.hours, 3.5);
+    [["P3 · Framing review", "1:50", 1.75], ["Gaps", "1:20", 1.25], ["No category", "0:10", 0.25]]);
+  assert.equal(acme.hours, 3.25);
   assert.equal(acme.detailed, true);
   assert.equal(beta.detailed, false);
 
   const text = summaryText(st, k, 0);
-  assert.match(text, /Acme: 3\.5 h\n  P3 · Framing review: 2\.0 h\n  Gaps: 1\.5 h\n  No category: 0\.0 h\nBeta: 1\.0 h\n/);
-  assert.match(text, /Total: 4\.5 h/);
+  assert.match(text, /Acme: 3\.25 h\n  P3 · Framing review: 1\.75 h\n  Gaps: 1\.25 h\n  No category: 0\.25 h\nBeta: 1\.00 h\n/);
+  assert.match(text, /Total: 4\.25 h/);
 
   const csv = csvFor(st, k, 0).trim().split("\r\n");
   assert.equal(csv[0], "date,client,category,note,tracked_hours,hours");
-  assert.equal(csv[1], `${k},"Acme","P3","Framing review",1.83,2.0`);
+  assert.equal(csv[1], `${k},"Acme","P3","Framing review",1.83,1.75`);
   assert.equal(csv.length, 5);
 });
 

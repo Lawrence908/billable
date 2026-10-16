@@ -162,15 +162,17 @@ export function fmtHMS(ms) {
   return `${Math.floor(s / 3600)}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`;
 }
 
-export const fmtHours = (h) => h.toFixed(1);
+// Two decimals, because quarters need them: 0.25, 1.50, 2.00.
+export const fmtHours = (h) => h.toFixed(2);
 
 export function prettyDay(key) {
   const [y, m, d] = key.split("-").map(Number);
   return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
 }
 
-// Nearest half hour. 15 minutes rounds up to 0.5, 14 down to 0.
-export const roundHalf = (ms) => Math.round((ms / HOUR) * 2) / 2;
+// Nearest quarter hour. 7.5 minutes rounds up to 0.25, anything less down
+// to 0. 7.5 min is exactly 0.125 h, so the halfway case is exact in floating point.
+export const roundQuarter = (ms) => Math.round((ms / HOUR) * 4) / 4;
 
 /* ---------- totals ---------- */
 
@@ -199,9 +201,9 @@ const categoryOrder = (key) => {
   return i < 0 ? CATEGORIES.length : i; // untagged time sorts last
 };
 
-// One row per client, each with lines per category + note. Every line is
-// rounded on its own, because each is entered separately at work; the client
-// total is the sum of its rounded lines.
+// One row per client, each with lines per category + note. A line's time is
+// added up across the day first and rounded once, so short bursts are neither
+// lost nor inflated; the client total is the sum of its rounded lines.
 export function summaryRows(st, key, now) {
   const [from, to] = dayBounds(key);
   const perClient = new Map();
@@ -218,7 +220,7 @@ export function summaryRows(st, key, now) {
     .filter((c) => perClient.has(c.id))
     .map((c) => {
       const lines = [...perClient.get(c.id).values()]
-        .map((l) => ({ ...l, label: tagLabel(l.category, l.note) || "No category", hours: roundHalf(l.ms) }))
+        .map((l) => ({ ...l, label: tagLabel(l.category, l.note) || "No category", hours: roundQuarter(l.ms) }))
         .sort((a, b) => categoryOrder(a.category) - categoryOrder(b.category) || a.note.localeCompare(b.note));
       return {
         client: c,
@@ -239,7 +241,7 @@ export function summaryText(st, key, now) {
     lines.push(`${r.client.name}: ${fmtHours(r.hours)} h`);
     if (r.detailed) for (const l of r.lines) lines.push(`  ${l.label}: ${fmtHours(l.hours)} h`);
   }
-  lines.push("", `Total: ${fmtHours(rows.reduce((a, r) => a + r.hours, 0))} h`, "(Rounded to the nearest 0.5 h per line.)");
+  lines.push("", `Total: ${fmtHours(rows.reduce((a, r) => a + r.hours, 0))} h`, "(Each line rounded to the nearest 0.25 h.)");
   if (existingSessions(st).some((s) => s.end === null)) lines.push("Note: a timer was still running when this was generated.");
   return lines.join("\n");
 }

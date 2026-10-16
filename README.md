@@ -2,7 +2,7 @@
 
 A per-client hours tracker for a phone or a browser. Type a client name, press
 Start and Stop through the day, and get a summary with each client rounded to the
-nearest half hour, ready to email or paste into a work timesheet.
+nearest quarter hour, ready to email or paste into a work timesheet.
 
 Live at [billable.chrislawrence.ca](https://billable.chrislawrence.ca). No account,
 no build step, and no runtime dependencies.
@@ -22,8 +22,10 @@ next one started on that card, are labelled with them.
   clients, most recent first. Suggestions are derived from history rather than stored
   separately, so they build up and sync on their own.
 - The summary, email and CSV list each client with one line per category and note.
-  **Each line is rounded to 0.5 h on its own**, because each is entered separately at
-  work, and the client total is the sum of its lines. A client tracked without
+  **Each line's time for the day is added up, then rounded once to the nearest 0.25 h**
+  (7.5 minutes rounds up), because each line is entered separately at work. The client
+  total is the sum of its lines. Rounding the total rather than each start/stop means
+  three 8-minute stretches count as 24 minutes, so 0.5 h, rather than 0.75 h. A client tracked without
   categories reads exactly as before.
 - Under Fix times, entries can be retagged when a switch was forgotten.
 

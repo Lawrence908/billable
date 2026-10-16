@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Billable · hours per client</title>
-<meta name="description" content="Start and stop a timer per client, then get the day's hours rounded to the nearest half hour. Everything stays in your browser.">
+<meta name="description" content="Start and stop a timer per client, then get the day's hours rounded to the nearest quarter hour. Everything stays in your browser.">
 <meta name="theme-color" content="#16181c">
 <meta name="build" content="__BUILD_ID__">
 <link rel="manifest" href="/manifest.webmanifest">
@@ -49,7 +49,7 @@
   </section>
 
   <details class="panel fold" id="summary-wrap">
-    <summary class="section-h">Summary <span class="fold-status" id="summary-badge">0.0 h</span></summary>
+    <summary class="section-h">Summary <span class="fold-status" id="summary-badge">0.00 h</span></summary>
     <div class="panel-head">
       <div class="day-nav">
         <button type="button" class="btn btn-ghost" id="day-prev" aria-label="Previous day">&larr;</button>
@@ -61,9 +61,9 @@
     <table class="summary" id="summary">
       <thead><tr><th>Client</th><th class="num">Tracked</th><th class="num">Hours</th></tr></thead>
       <tbody></tbody>
-      <tfoot><tr><th>Total</th><th class="num" id="sum-exact">0:00</th><th class="num" id="sum-rounded">0.0</th></tr></tfoot>
+      <tfoot><tr><th>Total</th><th class="num" id="sum-exact">0:00</th><th class="num" id="sum-rounded">0.00</th></tr></tfoot>
     </table>
-    <p class="note">Hours are rounded to the nearest 0.5 for each line. A client tracked with categories gets one line per category and note.</p>
+    <p class="note">Each line's time for the day is added up, then rounded to the nearest 0.25 h. A client tracked with categories gets one line per category and note.</p>
 
     <div class="send">
       <div class="send-row">
