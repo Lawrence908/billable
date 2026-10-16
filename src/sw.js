@@ -1,30 +1,49 @@
 // Offline support: keeps a copy of the app so Billable opens with no signal.
 //
-// Your data never passes through here. It lives in localStorage, and /api/
-// (sync) requests are left to the network untouched. Each deploy stamps a new
-// version below, which installs a fresh copy and deletes the previous one.
+// What this worker does, and all it does:
+// - caches this site's own files (the list below, plus same-origin files the
+//   page itself asks for), so the app opens offline;
+// - answers the page's requests for those files from that cache.
+// It never handles other sites' requests, never handles /api/ (sync, when a
+// build includes it), never sees your data (which lives in localStorage, out
+// of its reach), and has no message, push or background-sync handlers, so it
+// cannot send anything anywhere.
+//
+// Each deploy stamps a new version below, which installs a fresh copy and
+// deletes the previous one. Lines marked "sync-only" are removed by builds
+// without sync, along with the files they name.
 
 const VERSION = "__BUILD_ID__";
 const SHELL = [
   "/",
   "/app.css?v=__BUILD_ID__",
   "/js/app.js?v=__BUILD_ID__",
+  "/js/config.js?v=__BUILD_ID__",
   "/js/model.js?v=__BUILD_ID__",
-  "/js/crypto.js?v=__BUILD_ID__",
-  "/js/sync.js?v=__BUILD_ID__",
+  "/js/bytes.js?v=__BUILD_ID__",
   "/js/transfer.js?v=__BUILD_ID__",
-  "/js/words.js?v=__BUILD_ID__",
+  "/js/sync-ui.js?v=__BUILD_ID__", // sync-only
+  "/js/sync.js?v=__BUILD_ID__", // sync-only
+  "/js/crypto.js?v=__BUILD_ID__", // sync-only
+  "/js/words.js?v=__BUILD_ID__", // sync-only
   "/vendor/qrcode-2.0.4.js?v=__BUILD_ID__",
   "/manifest.webmanifest",
   "/favicon.svg",
   "/favicon.ico",
   "/apple-touch-icon.png",
 ];
+// Served by the reverse proxy in front, not this app, so cached if present.
+const OPTIONAL = ["/shared-footer/footer.css", "/shared-footer/logo-portrait.png"];
 // On a weak signal, wait this long for a fresh page before using the saved one.
 const NETWORK_TIMEOUT = 3000;
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  event.waitUntil((async () => {
+    const cache = await caches.open(VERSION);
+    await cache.addAll(SHELL);
+    await Promise.all(OPTIONAL.map((url) => cache.add(url).catch(() => {})));
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener("activate", (event) => {

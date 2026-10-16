@@ -1,6 +1,11 @@
 // The page: storage, rendering and event wiring. The rules live in model.js,
-// crypto.js, transfer.js and sync.js, which are pure enough to unit test;
-// this file is the thin layer that connects them to the DOM.
+// transfer.js and bytes.js, which are pure enough to unit test; this file is
+// the thin layer that connects them to the DOM.
+//
+// Encrypted sync is optional and off by default (config.js). When a build
+// turns it on, sync-ui.js is loaded and plugs into `hooks` below. When it is
+// off, that module is not even in the build, and nothing here makes a network
+// request after the page has loaded.
 
 import {
   CATEGORIES, activeClients, atTime, clientById, clientByName, clock, csvFor, dayBounds, dayKey, endAfter,
@@ -8,12 +13,11 @@ import {
   prettyDay, retagClient, retagSession, runningFor, sheetRows, shiftDay, stopAt, summaryRows, summaryText, tagLabel,
   timelineFor, timerNudges, toTSV, toggleTimer, totalsFor,
 } from "./model.js";
-import { KDF_VERSION, deriveKeys, generatePhrase, normalisePhrase, phraseProblem } from "./crypto.js";
-import { createSyncer, mailboxClient } from "./sync.js";
+import { SYNC_ENABLED } from "./config.js";
 import { applyTransfer, buildTransfer, decodeTransfer, encodeTransfer } from "./transfer.js";
 
 const STATE_KEY = "billable.v1";
-const SYNC_KEY = "billable.sync";
+const SYNC_KEY = "billable.sync"; // only read to delete it when sync is off
 const TIP_KEY = "billable.tip-dismissed";
 const EXPANDED_KEY = "billable.expanded"; // which cards show their detail panel; this device only
 const SUMMARY_OPEN_KEY = "billable.summary-open"; // the summary starts minimized until opened
@@ -24,6 +28,9 @@ const BUILD = document.querySelector('meta[name="build"]').content;
 const TRANSFER_MAX = 1400; // link characters; beyond this a QR code is hard to scan off a screen
 
 const $ = (id) => document.getElementById(id);
+
+// Filled in by sync-ui.js when sync is enabled; harmless no-ops otherwise.
+const hooks = { changed() {}, active: () => false, render() {} };
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 /* ---------- storage ---------- */
@@ -82,7 +89,7 @@ function commit() {
   state = normalise(state);
   saveState();
   render();
-  scheduleSync();
+  hooks.changed();
 }
 
 // Ask the browser not to evict our storage under disk pressure. Chrome decides
@@ -225,7 +232,7 @@ function setSetting(field, value) {
   state.settings[field] = value;
   state.settings.updated = Date.now();
   saveState();
-  scheduleSync();
+  hooks.changed();
 }
 
 /* ---------- forgotten timers ---------- */
@@ -303,113 +310,16 @@ function icon(d) {
   return svg;
 }
 
-/* ---------- sync wiring ---------- */
-
-let sync = null;      // { v, phrase, access, key } from storage, or null
-let syncer = null;    // the engine for that config
-let syncTimer = null;
-let syncWorking = ""; // "Unlocking…" while deriving keys
-let phraseShown = false;
-
-function loadSyncConfig() {
-  try {
-    const c = JSON.parse(storage.get(SYNC_KEY) || "null");
-    return c && typeof c.phrase === "string" ? c : null;
-  } catch {
-    return null;
-  }
-}
-
-function useSync(config) {
-  sync = config;
-  syncer = config && createSyncer({
-    config,
-    getState: () => state,
-    setState: (next) => {
-      state = next;
-      saveState();
-      renderSoon();
-    },
-    onStatus: renderSync,
-  });
-  if (config) storage.set(SYNC_KEY, JSON.stringify(config));
-  else storage.remove(SYNC_KEY);
-}
-
-async function keysFor(phrase) {
-  const keys = await deriveKeys(phrase);
-  return { v: KDF_VERSION, phrase: normalisePhrase(phrase), ...keys };
-}
-
-function scheduleSync(delay = 800) {
-  if (!syncer) return;
-  clearTimeout(syncTimer);
-  syncTimer = setTimeout(syncNow, delay);
-}
-
-function syncNow() {
-  clearTimeout(syncTimer);
-  syncTimer = null;
-  return syncer ? syncer.sync() : Promise.resolve();
-}
-
-// mode "join" requires synced data to exist already; "create" will start it.
-async function connect(phrase, mode) {
-  if (!crypto.subtle) {
-    toast("Sync needs a secure (https) address.");
-    return false;
-  }
-  setSyncWorking("Unlocking…");
-  try {
-    const config = await keysFor(phrase);
-    const existing = await mailboxClient(config.access).get();
-    if (mode === "join" && !existing) {
-      toast("No synced data found for that passphrase. Check the words and try again.");
-      return false;
-    }
-    phraseShown = false;
-    useSync(config);
-    requestPersist();
-    await syncNow();
-    render();
-    if (syncer.status.error) toast(`Connected, but the first sync failed: ${syncer.status.error}.`);
-    else toast(existing ? "Connected. This device now has your synced data." : "Sync is on. Use the same passphrase on your other devices.");
-    return true;
-  } catch (e) {
-    toast(`Could not connect: ${e.message || e}`);
-    return false;
-  } finally {
-    setSyncWorking("");
-  }
-}
-
-const syncLink = (phrase) => `${location.origin}/#sync=${phrase.split(" ").join("-")}`;
-
 /* ---------- QR codes ---------- */
-
-const loaded = new Map();
-function loadScript(src) {
-  if (!loaded.has(src)) {
-    loaded.set(src, new Promise((resolve, reject) => {
-      const s = document.createElement("script");
-      s.src = `${src}?v=${BUILD}`;
-      s.onload = resolve;
-      s.onerror = () => {
-        loaded.delete(src);
-        reject(new Error("could not load part of the page; check your connection"));
-      };
-      document.head.append(s);
-    }));
-  }
-  return loaded.get(src);
-}
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 // Built from the module grid as one SVG path, rather than the library's own
 // SVG/GIF helpers, so nothing is injected as HTML and the strict CSP holds.
-async function renderQR(container, text, label) {
-  await loadScript("/vendor/qrcode-2.0.4.js");
+// The library (qrcode-generator, vendored) loads with the page, so drawing a
+// code later fetches nothing.
+function renderQR(container, text, label) {
+  if (typeof window.qrcode !== "function") throw new Error("The QR code part of the page didn't load. Reload and try again.");
   const qr = window.qrcode(0, "L");
   qr.addData(text, "Byte");
   qr.make();
@@ -636,10 +546,15 @@ function renderTimeline(now) {
   }));
 }
 
+// The entry a timeline tap pointed at stays highlighted briefly, even if the
+// list is redrawn in the meantime (the minute tick rebuilds it).
+let flashed = { id: null, until: 0 };
+
 function showEntry(sessionId) {
   $("log-wrap").open = true;
   const row = document.querySelector(`#log [data-id="${CSS.escape(sessionId)}"]`);
   if (!row) return;
+  flashed = { id: sessionId, until: Date.now() + 1500 };
   row.scrollIntoView({ behavior: "smooth", block: "center" });
   row.classList.remove("flash");
   void row.offsetWidth; // restart the animation
@@ -766,7 +681,8 @@ function renderLog(now) {
   const tagging = existingClients(state).some((c) => c.category) || existingSessions(state).some((s) => s.category);
   $("log").replaceChildren(...entries.map((s) => {
     const c = clientById(state, s.clientId);
-    return el("li", { class: "entry", "data-id": s.id },
+    const flash = flashed.id === s.id && Date.now() < flashed.until;
+    return el("li", { class: flash ? "entry flash" : "entry", "data-id": s.id },
       el("span", { class: "entry-client", title: c.name }, c.name + (c.archived ? " (removed)" : ""),
         s.start < from ? el("small", { text: " · from previous day" }) : null,
         s.end !== null && s.end > to ? el("small", { text: " · into next day" }) : null),
@@ -816,34 +732,8 @@ function renderStorageNote() {
   navigator.storage.persisted().then((yes) => {
     $("storage-note").textContent = yes
       ? "This browser has agreed not to clear Billable's storage when space runs low."
-      : "This browser may clear Billable's storage if the device runs low on space. Sync protects against that.";
+      : "This browser may clear Billable's storage if the device runs low on space. Export a backup now and then.";
   }).catch(() => {});
-}
-
-function setSyncWorking(msg) {
-  syncWorking = msg;
-  for (const b of document.querySelectorAll("#sync-off button")) b.disabled = !!msg;
-  renderSync();
-}
-
-function renderSync() {
-  const on = !!syncer;
-  const status = syncer?.status;
-  $("sync-off").hidden = on;
-  $("sync-on").hidden = !on;
-  $("sync-working").textContent = syncWorking;
-  $("sync-working").hidden = !syncWorking;
-  const badge = $("sync-badge");
-  badge.className = `fold-status${on ? (status.error ? " bad" : " good") : ""}`;
-  badge.textContent = !on ? "Off" : status.error ? "Problem" : status.busy ? "Syncing…" : "On";
-  if (!on) return;
-  const line = $("sync-status");
-  line.textContent = status.error ? `Last sync failed: ${status.error}.`
-    : status.busy ? "Syncing…" : status.last ? `Synced at ${clock(status.last)}.` : "Not synced yet.";
-  line.className = `sync-status${status.error ? " bad" : ""}`;
-  // A fixed mask, so the hidden passphrase does not give away its word lengths.
-  $("sync-phrase").textContent = phraseShown ? sync.phrase : "•••••• ".repeat(6).trim();
-  $("sync-show").textContent = phraseShown ? "Hide" : "Show";
 }
 
 // Safari, and every iOS browser built on it, deletes a site's storage after
@@ -853,12 +743,13 @@ function renderTip() {
   const ios = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   const macSafari = !ios && /Macintosh/.test(ua) && /Safari\//.test(ua) && !/Chrome|Chromium|Edg|Firefox|OPR/.test(ua);
   const standalone = navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
-  const show = (ios || macSafari) && !standalone && !syncer && !storage.get(TIP_KEY);
+  const show = (ios || macSafari) && !standalone && !hooks.active() && !storage.get(TIP_KEY);
   $("safari-tip").hidden = !show;
   if (!show) return;
+  const carry = SYNC_ENABLED ? "with sync or a transfer link" : "with a transfer link (Move to another device)";
   $("safari-tip-text").textContent = ios
-    ? "Safari erases this site's data after 7 days without a visit. Add Billable to your Home Screen (Share, then Add to Home Screen) and open it from there, or turn on sync below. The Home Screen app starts with its own empty copy, so bring your data across with sync."
-    : "Safari erases this site's data after 7 days without a visit. Turn on sync below, or use File, then Add to Dock, and open Billable from the Dock.";
+    ? `Safari erases this site's data after 7 days without a visit. Add Billable to your Home Screen (Share, then Add to Home Screen) and open it from there. The Home Screen app starts with its own empty copy, so bring your data across ${carry}.`
+    : `Safari erases this site's data after 7 days without a visit. Use File, then Add to Dock, and open Billable from the Dock${SYNC_ENABLED ? ", or turn on sync below" : ", and export a backup now and then"}.`;
 }
 
 function render() {
@@ -871,7 +762,7 @@ function render() {
   renderSummary(now);
   renderLog(now);
   renderSettings();
-  renderSync();
+  hooks.render();
   renderTip();
 }
 
@@ -912,24 +803,17 @@ function tick() {
 async function handleHash() {
   const h = location.hash;
   if (!h.startsWith("#sync=") && !h.startsWith("#import=")) return;
-  // Drop the secret from the address bar and history before anything else.
-  history.replaceState(null, "", location.pathname + location.search);
 
   if (h.startsWith("#sync=")) {
-    const phrase = normalisePhrase(decodeURIComponent(h.slice(6)));
-    if (sync?.phrase === phrase) return toast("This device is already syncing with that passphrase.");
-    // A link like this can come from anyone, and joining shares this device's
-    // data with whoever holds the passphrase. Say so before going ahead.
-    const ok = confirm(
-      "This link turns on sync with a passphrase.\n\n" +
-      "Only continue if you made this link yourself, on your own device. Anyone who knows the passphrase can read everything this device then syncs." +
-      (sync ? "\n\nThis replaces the passphrase this device uses now." : ""));
-    if (!ok) return;
-    $("sync-wrap").open = true;
-    await connect(phrase, "join");
+    // With sync built in, sync-ui.js handles these links. Without it, there is
+    // nothing to join: just make sure the passphrase does not stay in the address bar.
+    if (SYNC_ENABLED) return;
+    history.replaceState(null, "", location.pathname + location.search);
+    toast("This version of Billable has no sync. Nothing was changed.");
     return;
   }
 
+  history.replaceState(null, "", location.pathname + location.search);
   try {
     const t = await decodeTransfer(h);
     if (confirm(`Add ${plural(t.clients.length, "client", "clients")} and ${plural(t.sessions.length, "time entry", "time entries")} from the transfer link to this device?`)) {
@@ -1005,7 +889,7 @@ $("import-file").addEventListener("change", guarded(async (e) => {
 }));
 
 $("wipe-btn").addEventListener("click", () => {
-  const ask = syncer
+  const ask = hooks.active()
     ? "Erase every client and time entry? Sync is on, so this also erases them on your other devices."
     : "Erase every client and time entry stored in this browser?";
   if (!confirm(ask)) return;
@@ -1015,66 +899,10 @@ $("wipe-btn").addEventListener("click", () => {
   commit();
 });
 
-// Sync: create a passphrase
-async function showNewPhrase() {
-  const { default: words } = await import(`./words.js?v=${BUILD}`);
-  $("sync-new-phrase").textContent = generatePhrase(words);
-}
-$("sync-create").addEventListener("click", guarded(async () => {
-  await showNewPhrase();
-  $("sync-new-saved").checked = false;
-  $("sync-new-start").disabled = true;
-  $("sync-new").hidden = false;
-}));
-$("sync-new-again").addEventListener("click", guarded(showNewPhrase));
-$("sync-new-copy").addEventListener("click", () => copyText($("sync-new-phrase").textContent, "Passphrase"));
-$("sync-new-saved").addEventListener("change", (e) => { $("sync-new-start").disabled = !e.target.checked; });
-$("sync-new-start").addEventListener("click", async () => {
-  if (await connect($("sync-new-phrase").textContent, "create")) $("sync-new").hidden = true;
-});
-
-// Sync: join with a passphrase from another device
-$("sync-join").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const phrase = $("sync-join-phrase").value;
-  if (normalisePhrase(phrase) && (await connect(phrase, "join"))) $("sync-join-phrase").value = "";
-});
-
-// Sync: choose your own passphrase
-$("sync-own").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const phrase = $("sync-own-phrase").value;
-  const problem = phraseProblem(phrase);
-  if (problem) return toast(problem);
-  if (await connect(phrase, "create")) $("sync-own-phrase").value = "";
-});
-
-$("sync-show").addEventListener("click", () => { phraseShown = !phraseShown; renderSync(); });
-$("sync-now").addEventListener("click", () => syncNow());
-$("sync-qr-btn").addEventListener("click", guarded(async () => {
-  const box = $("sync-qr");
-  if (box.hidden) await renderQR($("sync-qr-code"), syncLink(sync.phrase), "QR code that connects another device to sync");
-  box.hidden = !box.hidden;
-}));
-$("sync-off-btn").addEventListener("click", () => {
-  if (!confirm("Stop syncing on this device? Your data stays here, and other devices keep syncing.")) return;
-  useSync(null);
-  $("sync-qr").hidden = true;
-  render();
-});
-$("sync-delete").addEventListener("click", guarded(async () => {
-  if (!confirm("Delete the encrypted copy from the server and stop syncing on this device? Data on your devices stays. A device still syncing with this passphrase will upload its copy again; turn sync off there too.")) return;
-  await syncer.mailbox.remove();
-  useSync(null);
-  $("sync-qr").hidden = true;
-  render();
-  toast("Server copy deleted. Sync is off on this device.");
-}));
-
-// Transfer without sync
+// Move to another device
 $("move-make").addEventListener("click", guarded(async () => {
   const t = await makeTransferLink();
-  if (!t) return toast("Too much data for a QR code. Use sync, or Export backup under Settings.");
+  if (!t) return toast("Too much data for a QR code. Use Export backup under Settings instead.");
   await renderQR($("move-qr"), t.url, "QR code that copies your data to another device");
   $("move-box").hidden = false;
   $("move-box").dataset.url = t.url;
@@ -1100,23 +928,12 @@ $("safari-tip-close").addEventListener("click", () => {
 
 // Another tab changed the data: adopt it rather than overwrite it later.
 window.addEventListener("storage", (e) => {
-  if (e.key === STATE_KEY) state = loadState();
-  if (e.key === SYNC_KEY) useSyncFromStorage();
-  if (e.key === STATE_KEY || e.key === SYNC_KEY) render();
+  if (e.key !== STATE_KEY) return;
+  state = loadState();
+  render();
 });
 
 /* ---------- start ---------- */
-
-function useSyncFromStorage() {
-  const config = loadSyncConfig();
-  if (!config) return useSync(null);
-  if (config.v === KDF_VERSION) return useSync(config);
-  // Saved by an older key scheme: derive current keys from the stored passphrase.
-  keysFor(config.phrase).then((fresh) => {
-    useSync(fresh);
-    syncNow();
-  }).catch(() => {});
-}
 
 $("summary-wrap").open = storage.get(SUMMARY_OPEN_KEY) === "1";
 $("summary-wrap").addEventListener("toggle", (e) => storage.set(SUMMARY_OPEN_KEY, e.target.open ? "1" : "0"));
@@ -1127,21 +944,29 @@ $("timeline-wrap").addEventListener("toggle", (e) => storage.set(TIMELINE_OPEN_K
 // carries the build, so each deploy installs a fresh copy and drops the old one.
 if ("serviceWorker" in navigator) navigator.serviceWorker.register(`/sw.js?v=${BUILD}`).catch(() => {});
 
-useSyncFromStorage();
+// The shared footer's logo is served by the reverse proxy in production. If it
+// is missing (a local run), drop the broken image. Done here rather than with
+// an inline onerror, which the Content Security Policy does not allow.
+const logo = document.querySelector(".footer-logo");
+if (logo && logo.complete && !logo.naturalWidth) logo.remove();
+else logo?.addEventListener("error", () => logo.remove());
+
 render();
 renderStorageNote();
 handleHash();
 window.addEventListener("hashchange", handleHash);
 setInterval(tick, 1000);
-// Poll while visible so a timer started on the phone shows up on the laptop.
-setInterval(() => { if (!document.hidden) syncNow(); }, 30000);
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) {
-    if (syncTimer) syncNow(); // push a pending change before the tab is backgrounded
-  } else {
-    render();
-    syncNow();
-  }
-});
-window.addEventListener("online", () => syncNow());
-syncNow();
+document.addEventListener("visibilitychange", () => { if (!document.hidden) render(); });
+
+if (SYNC_ENABLED) {
+  const app = {
+    $, storage, toast, copyText, guarded, renderQR, requestPersist, clock, render, build: BUILD,
+    getState: () => state,
+    replaceState: (next) => { state = next; saveState(); renderSoon(); },
+  };
+  import(`./sync-ui.js?v=${BUILD}`).then((m) => m.installSync(app, hooks)).catch(() => toast("Sync could not start. Reload to try again."));
+} else {
+  // Sync is not in this build. Remove anything an earlier, sync-enabled
+  // version left behind: the stored passphrase and the keys derived from it.
+  storage.remove(SYNC_KEY);
+}

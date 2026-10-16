@@ -11,7 +11,7 @@
 //   n  distinct notes, so a note used many times is carried once
 // deflated (deflate-raw) and base64url-encoded.
 
-import { compress, decompress, fromB64u, toB64u } from "./crypto.js";
+import { compress, decompress, fromB64u, toB64u } from "./bytes.js";
 import { CATEGORIES, MINUTE, clientByName, dayBounds, dayKey, existingClients, existingSessions, normalise, settleRunning, shiftDay } from "./model.js";
 
 const MAX_LINK = 8000; // characters; a real link is a few hundred

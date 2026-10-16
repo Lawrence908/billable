@@ -1,10 +1,13 @@
 // End-to-end check against a running deployment, driving only the real UI.
-// Each "device" is a separate browser context with its own storage.
+// Each "device" is a separate browser context with its own storage. Sync
+// scenarios run only when the deployment was built with ENABLE_SYNC=true; the
+// network-silence check runs on every build and must find zero requests after
+// load (it allows the sync endpoint only when sync is built in).
 //
 //   npm install --no-save playwright && npx playwright install chromium
 //   node tests/e2e/two-devices.mjs https://billable.example
 //
-// It creates one sync mailbox on the target server; the last step deletes it.
+// With sync built in, it creates one sync mailbox; the last step deletes it.
 
 import { readFileSync } from "node:fs";
 import { chromium } from "playwright";
@@ -45,13 +48,99 @@ const add = async (p, name) => { await p.fill("#client-name", name); await p.cli
 const syncNow = async (p) => { await p.click("#sync-now"); await p.waitForTimeout(150); await synced(p); };
 const toast = (p) => p.textContent("#toast");
 
+// Loads the app in a fresh browser, waits for it to settle (including the
+// service worker installing), then uses every feature while recording every
+// request the browser makes and every Content Security Policy violation.
+async function silence(hasSync) {
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, acceptDownloads: true });
+  await ctx.grantPermissions(["clipboard-read", "clipboard-write"], { origin: BASE });
+  const p = await ctx.newPage();
+  p.on("dialog", (d) => (d.type() === "prompt" ? d.accept("Acme Corporation") : d.accept()));
+  const violations = [];
+  p.on("console", (m) => { if (/Content Security Policy|Refused to/i.test(m.text())) violations.push(m.text()); });
+  let recording = false;
+  const requests = [];
+  ctx.on("request", (r) => { if (recording) requests.push(`${r.method()} ${r.url()}`); });
+
+  await p.goto(BASE, { waitUntil: "networkidle" });
+  await p.evaluate(() => navigator.serviceWorker?.ready);
+  await p.waitForTimeout(1500);
+  recording = true;
+
+  const at = (s) => p.locator(s);
+  await add(p, "Acme Corp");
+  await add(p, "Northwind");
+  await p.click('button[aria-label="Start Acme Corp"]');
+  await p.click('.client:has-text("Acme Corp") .more-toggle');
+  await p.selectOption('.client:has-text("Acme Corp") .tag-category', "p2");
+  await p.fill('.client:has-text("Acme Corp") .tag-note', "AR Replication");
+  await p.press('.client:has-text("Acme Corp") .tag-note', "Enter");
+  await p.click('button[aria-label="Start Northwind"]');
+  await p.click('button[aria-label="Stop Northwind"]');
+  await p.click("#log-wrap > summary");
+  await p.selectOption("#entry-client", { label: "Northwind" });
+  await p.fill("#entry-start", "00:10");
+  await p.fill("#entry-end", "00:40");
+  await p.click("#add-entry button");
+  await at("#log .entry input[type=time]").first().fill("00:05");
+  await at("#log .entry input[type=time]").first().dispatchEvent("change");
+  if (await at("#timeline .gap").count()) await at("#timeline .gap").first().click();
+  if (await at("#timeline .block").count()) await at("#timeline .block").first().click();
+  await p.click("#summary-wrap > summary");
+  await p.click("#day-prev");
+  await p.click("#day-today");
+  await p.click('button[aria-label="Copy Northwind for Sheets"]');
+  await p.click("#copy-btn");
+  await p.fill("#email-to", "me@example.com");
+  await p.click("#email-btn").catch(() => {});
+  await p.waitForTimeout(300);
+  await p.click("#move-wrap > summary");
+  await p.click("#move-make");
+  await p.click("#move-copy");
+  await p.click(".settings > summary");
+  await p.check('input[name="sheet-layout"][value="all"]');
+  await p.fill("#employee", "Test Person");
+  await p.press("#employee", "Tab");
+  const [csv] = await Promise.all([p.waitForEvent("download"), p.click("#csv-btn")]);
+  const [backup] = await Promise.all([p.waitForEvent("download"), p.click("#export-btn")]);
+  await p.setInputFiles("#import-file", await backup.path());
+  await p.waitForTimeout(300);
+  const importToast = await toast(p);
+  await p.click('.client:has-text("Acme Corp") button:has-text("Rename")');
+  await p.click('.client:has-text("Northwind") button:has-text("Remove")');
+  await p.click('#archived button:has-text("Restore")');
+  await p.click('.client:has-text("Acme Corporation") .toggle');
+  await p.waitForTimeout(1500);
+  recording = false;
+
+  const csvOk = readFileSync(await csv.path(), "utf8").startsWith("date,client");
+  const backupOk = JSON.parse(readFileSync(await backup.path(), "utf8")).clients.length === 2;
+  // blob: and data: URLs are files the browser made in memory (the CSV and
+  // backup downloads). mailto: hands the summary to the mail app; nothing goes
+  // over the network. Anything else, http or https, would be a real request.
+  const offNetwork = (r) => / (blob|data|mailto):/.test(r);
+  const network = requests.filter((r) => !offNetwork(r) && !(hasSync && r.includes("/api/sync")));
+  const handoffs = requests.filter(offNetwork).map((r) => r.split(" ")[1].split(":")[0]);
+  check("CSV and backup export work, and import reads the backup back", csvOk && backupOk && /merged/i.test(importToast), importToast);
+  check("zero network requests after load while every feature is used", network.length === 0,
+    network.slice(0, 5).join(" | ") || `off-network only: ${[...new Set(handoffs)].join(", ") || "none"}`);
+  check("no Content Security Policy violations", violations.length === 0, violations.slice(0, 2).join(" | "));
+  await ctx.close();
+}
+
 try {
   const A = await device("A");
-  const B = await device("B");
+  const hasSync = !!(await A.p.$("#sync-wrap"));
+  results.push(`info sync is ${hasSync ? "built in" : "not in this build"}`);
 
   await add(A.p, "Acme Corp");
   await add(A.p, "Northwind");
   await A.p.click('button[aria-label="Start Acme Corp"]');
+  check("the sync panel is present exactly when sync is built in", hasSync === !!(await A.p.$("#sync-wrap")));
+  check("no sync passphrase is stored", !(await A.p.evaluate(() => localStorage.getItem("billable.sync"))) || hasSync);
+
+  if (hasSync) {
+  const B = await device("B");
   await A.p.click("#sync-wrap > summary");
   await A.p.click("#sync-create");
   await A.p.waitForFunction(() => document.getElementById("sync-new-phrase").textContent.split(" ").length === 6);
@@ -110,6 +199,18 @@ try {
   await synced(C.p);
   check("a QR sync link connects a device and leaves the address bar clean",
     C.p.url() === BASE && (await clients(C.p)).length === 3);
+  } else {
+    // A #sync= link on a build without sync must not linger in the address bar.
+    const S = await device("S");
+    await S.p.goto(`${BASE}#sync=maple-river-copper-tiger-lunar-hinge`);
+    await S.p.waitForTimeout(300);
+    check("a sync link on a build without sync is stripped and ignored",
+      S.p.url() === BASE && !(await S.p.evaluate(() => localStorage.getItem("billable.sync"))));
+    // Leftover sync state from an earlier build is cleaned up on load.
+    await S.p.evaluate(() => localStorage.setItem("billable.sync", JSON.stringify({ v: 2, phrase: "x y z", access: "a", key: "k" })));
+    await S.p.reload();
+    check("leftover sync keys are deleted on load", !(await S.p.evaluate(() => localStorage.getItem("billable.sync"))));
+  }
 
   await A.p.click("#move-wrap > summary");
   await A.p.click("#move-make");
@@ -119,7 +220,7 @@ try {
   await D.p.goto(link);
   await D.p.waitForTimeout(800);
   check("a transfer link copies data with no sync",
-    (await clients(D.p)).length === 3 && !(await D.p.evaluate(() => localStorage.getItem("billable.sync"))));
+    (await clients(D.p)).length === (await clients(A.p)).length && !(await D.p.evaluate(() => localStorage.getItem("billable.sync"))));
   await D.p.click("#move-wrap > summary");
   await D.p.fill("#move-link", link);
   await D.p.click("#move-paste button");
@@ -127,11 +228,13 @@ try {
   check("importing the same link twice adds nothing", /Added 0 new clients and 0 entries/.test(await toast(D.p)));
 
   const E = await device("E");
-  await E.p.click("#sync-wrap > summary");
-  await E.p.fill("#sync-join-phrase", "not the right words at all");
-  await E.p.click("#sync-join button");
-  await E.p.waitForFunction(() => document.getElementById("toast").textContent.length > 0, null, { timeout: 15000 });
-  check("a wrong passphrase is refused", /No synced data found/.test(await toast(E.p)));
+  if (hasSync) {
+    await E.p.click("#sync-wrap > summary");
+    await E.p.fill("#sync-join-phrase", "not the right words at all");
+    await E.p.click("#sync-join button");
+    await E.p.waitForFunction(() => document.getElementById("toast").textContent.length > 0, null, { timeout: 15000 });
+    check("a wrong passphrase is refused", /No synced data found/.test(await toast(E.p)));
+  }
 
   await add(E.p, '=HYPERLINK("x")');
   await E.p.click("#log-wrap > summary");
@@ -265,11 +368,15 @@ try {
   check("the app opens with no connection, data intact", (await clients(G.p)).length === 2);
   await G.ctx.setOffline(false);
 
-  await A.p.click("#sync-delete");
-  await A.p.waitForTimeout(500);
-  check("the synced copy can be deleted", /Server copy deleted/.test(await toast(A.p)));
+  await silence(hasSync);
+
+  if (hasSync) {
+    await A.p.click("#sync-delete");
+    await A.p.waitForTimeout(500);
+    check("the synced copy can be deleted", /Server copy deleted/.test(await toast(A.p)));
+  }
 } catch (e) {
-  check("run completed", false, e.message.split("\n")[0]);
+  check("run completed", false, e.message.split("\n").slice(0, 4).join(" / "));
 } finally {
   await browser.close();
 }

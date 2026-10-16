@@ -50,35 +50,89 @@ next one started on that card, are labelled with them.
 
 ## Privacy model
 
-Billable is built so the server never holds anything readable about you.
+The default build makes one promise, and the browser enforces it: **after the page
+loads, nothing leaves the browser.**
 
-- **Without sync**, data lives only in the browser's `localStorage`. Nothing you type
-  is sent anywhere.
-- **With sync**, data is encrypted in the browser before upload. The server stores
-  an opaque blob it has no key for. The passphrase and the decryption key never
-  leave the device.
-- **Transfer links and QR codes** carry their payload after the `#`, which browsers
-  never send to a server.
-- **Email** is a `mailto:` link that opens the user's own mail client.
-- **No IP addresses are recorded.** The sync server keeps them in memory, for at most
-  an hour, for rate limiting only. nginx access logging is off, and the reverse proxy
-  strips client addresses from its log.
-- **No third-party code runs.** A strict Content Security Policy allows only same-origin
-  scripts. That also blocks the analytics beacon Cloudflare injects.
+- **Data lives only in this browser's `localStorage`.** It is not encrypted on the
+  device, so anyone using that browser profile can read it, like any site's saved data.
+- **The page may open no connections.** The Content Security Policy is sent as a
+  header, with a `<meta>` fallback:
 
-### What it does not protect against
+  ```
+  default-src 'self'; connect-src 'none'; img-src 'self' data:; font-src 'self';
+  script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'none';
+  form-action 'none'; base-uri 'none'
+  ```
 
-- **A server that serves altered JavaScript.** This is true of every web app that
-  encrypts in the browser: you trust the code the server sends. This repository is
-  public so that the code can be read.
-- **Someone with the unlocked device.** Local data and the sync passphrase sit in
-  `localStorage` unencrypted, like any web app's saved state.
-- **Metadata.** The server sees when an encrypted copy is saved and how large it is.
-  Cloudflare sees what any CDN sees: IP addresses, user agents and request times.
-- **A lost passphrase.** It cannot be recovered or reset. Each device keeps its own
-  full copy regardless.
+  `connect-src 'none'` blocks fetch, XHR, WebSockets, EventSource and beacons outright.
+  Scripts, styles and images may come only from this site. There is no inline script,
+  so no `'unsafe-inline'` and no hashes.
+- **Everything the page needs loads with the page**, all self-hosted: the app modules,
+  the vendored QR library, the stylesheet, the icons and the inline SVGs. Nothing is
+  lazy-loaded, so nothing is fetched later.
+- **No third parties.** No CDN, web fonts, analytics or error reporting.
+  `Cache-Control: no-transform` stops Cloudflare injecting its bot-detection or
+  analytics scripts into the HTML. Before that header was added, it did inject them.
+- **The service worker** caches this site's own files for offline use and answers the
+  page's requests from that cache. It handles only same-origin `GET`s, never `/api/`,
+  never sees `localStorage`, and has no message, push or background-sync handlers.
+  `sw.js` gets its own policy (`default-src 'none'; connect-src 'self'`), because a
+  worker's fetches fall under `connect-src` and it must fetch the app's files to cache them.
+  This is the one place anything is allowed to connect.
+- **Data leaves only when you move it.** CSV and backup files are made in memory as
+  `blob:` URLs and saved by the browser. Copy uses the clipboard. Email hands a
+  `mailto:` link to the mail app. A transfer link carries its data in the `#` fragment,
+  which is never sent to a server.
+- **The server** stores no user data, and with sync off there is no API (`/api/` returns
+  404). nginx keeps no access log. The reverse proxy deletes client addresses from its
+  log. Cloudflare, which carries the traffic, sees what any CDN sees on page load.
 
-## How sync works
+### Verify it yourself
+
+1. Open the app, then your browser's developer tools (F12), on the **Network** tab.
+   Tick **Preserve log**.
+2. Reload once and wait a few seconds for the page and its offline copy to finish
+   loading. On a first visit the service worker caches the app's files; that's this
+   site's own files only.
+3. Press the 🚫 **Clear** button so the list is empty.
+4. Use every feature:
+   - add clients, start and stop timers
+   - open **More** and set a category and note
+   - edit and add entries under **Fix times**
+   - tap timeline gaps and blocks
+   - open **Summary**, change days, use each client's copy button and **Copy whole day
+     as text**
+   - **Move to another device**, then **Show transfer QR** and **Copy link**
+   - under **Settings**: **Day as CSV**, **Export backup**, **Import backup** (pick the
+     file you just exported), rename, remove and restore a client
+5. **Expect the list to stay empty.** The only entries Chrome may show are `blob:`
+   lines for the two downloads, which are files your browser made in memory, not
+   network requests.
+6. On the **Console** tab, expect no "Content Security Policy" messages. Any attempt to
+   connect anywhere would be refused and reported there.
+7. Optional: open **Application**, then **Service workers**, and tick **Offline**. Reload:
+   the app still opens with your data.
+
+The same check is automated in `tests/e2e/two-devices.mjs`. It records every request
+the browser makes, page and service worker alike, while it uses every feature, and
+fails on any network request or CSP violation.
+
+## Optional: encrypted sync (off by default)
+
+Built only with `ENABLE_SYNC=true ./deploy.sh`. With the flag off (the default):
+
+- `sync-ui.js`, `sync.js`, `crypto.js` and `words.js` are deleted from the image, and
+  their URLs return 404.
+- The sync panel is removed from the HTML, and the API container does not run.
+- `/api/` returns 404, and the CSP keeps `connect-src 'none'`.
+- On load, any sync passphrase or keys left by an earlier sync-enabled build are
+  deleted from the browser.
+
+With the flag on, the CSP relaxes only to `connect-src 'self'` (its own sync endpoint),
+and the privacy text switches to its sync version. The code below is kept, and tested
+in both modes, so it can move to company infrastructure later.
+
+### How it works
 
 ```mermaid
 flowchart LR
@@ -111,11 +165,16 @@ flowchart LR
 
 ```
 src/index.html, app.css     the page
+src/js/config.js            build switches (SYNC_ENABLED), rewritten by the Dockerfile
 src/js/model.js             state, time maths, rounding, merging      (pure)
-src/js/crypto.js            key derivation, encryption, encoding      (pure, Web Crypto)
+src/js/bytes.js             base64url and compression                 (pure)
 src/js/transfer.js          transfer-link encode, decode and import   (pure)
-src/js/sync.js              pull, merge, push; timeouts; retry on 409 (fetch is injected)
 src/js/app.js               storage, rendering and event wiring
+src/js/sync-ui.js           sync UI, loaded only by sync builds       ┐
+src/js/sync.js              pull, merge, push; timeouts; 409 retry    │ removed from
+src/js/crypto.js            key derivation, encryption                │ builds without
+src/js/words.js             passphrase wordlist                       ┘ sync
+src/sw.js                   offline cache of the app's own files
 src/js/words.js             generated wordlist (tools/build-words.py checks its hash)
 src/vendor/qrcode-2.0.4.js  qrcode-generator 2.0.4 (MIT), npm integrity verified
 api/server.py               the sync mailbox: standard library only
@@ -128,7 +187,8 @@ logic testable. Each module states its job in its opening comment.
 ## Running it
 
 ```sh
-./deploy.sh                 # docker compose: nginx front plus the sync API
+./deploy.sh                    # no sync: nginx only, no network requests after load
+ENABLE_SYNC=true ./deploy.sh   # adds the sync API container and the sync UI
 ```
 
 The compose file expects an external Docker network called `homelab-web` for the
@@ -154,10 +214,15 @@ node tests/e2e/two-devices.mjs http://localhost:8175   # needs: npm i --no-save 
     a hung connection
   - the real HTTP server: revisions, size and mailbox caps, rate limits, and
     concurrent writers
-- **The end-to-end test** drives five isolated browser contexts through the live UI:
-  creating, joining, offline edits, deletion, QR linking and transfer links.
+- **The end-to-end test** drives isolated browser contexts through the real UI. On every
+  build it checks categories, the timeline, forgotten timers, Copy for Sheets, offline
+  loading, and network silence (zero requests after load, zero CSP violations, CSV and
+  backup round trips). On sync builds it adds creating, joining, offline edits,
+  deletion and QR linking. Both modes passed: 32 checks without sync, 39 with.
 
 ## Limits
+
+The sync limits apply only to builds with `ENABLE_SYNC=true`.
 
 | What | Limit |
 |---|---|

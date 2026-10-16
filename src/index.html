@@ -2,6 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- Fallback for hosts that cannot send headers; nginx.conf sends the same policy
+     as a header, plus frame-ancestors, which only works as a header. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src __CONNECT_SRC__; img-src 'self' data:; font-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; form-action 'none'; base-uri 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Billable · hours per client</title>
 <meta name="description" content="Start and stop a timer per client, then get the day's hours rounded to the nearest quarter hour. Everything stays in your browser.">
@@ -90,6 +93,7 @@
     </div>
   </details>
 
+  <!-- sync:start -->
   <details class="panel fold" id="sync-wrap">
     <summary class="section-h">Sync devices <span class="fold-status" id="sync-badge">Off</span></summary>
     <p class="sync-working" id="sync-working" role="status" hidden></p>
@@ -150,9 +154,10 @@
       </div>
     </div>
   </details>
+  <!-- sync:end -->
 
   <details class="panel fold" id="move-wrap">
-    <summary class="section-h">Move without sync</summary>
+    <summary class="section-h">Move to another device</summary>
     <p class="note">Copies your clients and recent days to another device in one go, with nothing stored on any server. The data rides inside the link itself.</p>
     <button type="button" class="btn" id="move-make">Show transfer QR</button>
     <div class="qr-box" id="move-box" hidden>
@@ -201,7 +206,12 @@
       <p class="label">Removed clients</p>
       <ul class="archived" id="archived"></ul>
     </div>
+    <!-- nosync:start -->
+    <p class="note">Everything is stored only in this browser. It will not follow you to another device, and clearing site data erases it, so export a backup now and then.</p>
+    <!-- nosync:end -->
+    <!-- sync:start -->
     <p class="note">Without sync, everything is stored only in this browser. It will not follow you to another device, and clearing site data erases it.</p>
+    <!-- sync:end -->
     <p class="note" id="storage-note"></p>
     <div class="send-row">
       <button type="button" class="btn" id="csv-btn">Day as CSV</button>
@@ -212,36 +222,54 @@
     </div>
   </details>
 
+  <!-- nosync:start -->
   <details class="privacy">
     <summary>
       <span class="privacy-head"><svg class="lock" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7.5" rx="1.5" fill="currentColor"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>Private by design.</span>
-      Your clients and hours stay on your device. With sync on, they are encrypted before they leave it, so this server cannot read them. No account, no ads, no analytics.
+      Everything you enter is stored only in this browser, on this device. After the page loads, Billable makes no network requests, and your browser enforces that. No account, no ads, no analytics.
       <span class="privacy-more">How?</span>
     </summary>
     <ul>
-      <li><strong>Without sync</strong>, nothing you type is sent anywhere. It is stored only in this browser.</li>
-      <li><strong>With sync</strong>, your passphrase becomes two keys on your device. One lets the server find your encrypted copy. The other, the only key that can decrypt it, never leaves your device. The server stores scrambled bytes it has no way to read, and never sees your passphrase.</li>
-      <li><strong>Transfer links and QR codes</strong> carry their data after the # in the link, a part browsers never send to any server.</li>
-      <li><strong>Email</strong> opens your own mail app. Billable does not send anything itself.</li>
+      <li><strong>Stored only in this browser.</strong> Your clients and hours are saved in this browser's local storage. They are not encrypted on the device, so anyone using this browser profile could see them, as with other saved site data. Clearing site data erases them, so export a backup now and then.</li>
+      <li><strong>Nothing is sent anywhere.</strong> Billable has no server to send your data to. Its Content Security Policy tells your browser to refuse every connection the page might try to make, and to load no outside scripts, fonts or images. You can check this yourself in your browser's developer tools, on the Network tab.</li>
+      <li><strong>Works offline.</strong> A service worker keeps a copy of the app's own files from this site, so it opens without a connection. It stores none of your data.</li>
+      <li><strong>Only you move data out.</strong> CSV and backup files are made by your browser and saved to your device. Copy puts text on your clipboard. Email opens your mail app with the summary filled in, and nothing goes anywhere unless you send it from there. A transfer QR code or link carries data inside the link itself, read by the device that opens it.</li>
+      <li><strong>Loading the page is an ordinary visit.</strong> Cloudflare, which carries the traffic, sees what any website's network sees: your IP address, browser type and the time. Billable's own server does not record IP addresses, and never receives your clients or hours.</li>
+    </ul>
+  </details>
+  <!-- nosync:end -->
+  <!-- sync:start -->
+  <details class="privacy">
+    <summary>
+      <span class="privacy-head"><svg class="lock" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7.5" rx="1.5" fill="currentColor"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>Private by design.</span>
+      Your clients and hours are stored in this browser. If you turn on sync, they are encrypted on this device before upload, so this server cannot read them. No account, no ads, no analytics.
+      <span class="privacy-more">How?</span>
+    </summary>
+    <ul>
+      <li><strong>Stored in this browser.</strong> Your clients and hours are saved in this browser's local storage, not encrypted on the device. Clearing site data erases them.</li>
+      <li><strong>Without sync</strong>, nothing you enter is sent anywhere.</li>
+      <li><strong>With sync</strong>, your passphrase becomes two keys on your device. One lets the server find your encrypted copy. The other, the only key that can decrypt it, never leaves your device. The server stores scrambled bytes it has no way to read, and never sees your passphrase. The page may connect only to this site's own sync server.</li>
+      <li><strong>Only you move data out</strong> otherwise: CSV and backup files are saved to your device, Copy uses your clipboard, Email opens your mail app, and a transfer link carries its data inside the link.</li>
       <li><strong>No outside scripts</strong> can run on this page. Your browser enforces that.</li>
       <li><strong>No IP addresses are recorded</strong> by Billable's server. It holds them in memory for up to an hour, only to stop abuse of sync.</li>
       <li><strong>What is still seen:</strong> Cloudflare, which carries the traffic, sees standard request details like any website: your IP address, browser type and when you visit. With sync on, the server sees when an encrypted copy is saved and how big it is.</li>
     </ul>
   </details>
+  <!-- sync:end -->
 
   <p class="build">build __BUILD_TIME__</p>
 </main>
 
 <footer class="chrislawrence-footer">
   <a href="https://chrislawrence.ca" class="footer-home-link" aria-label="Back to chrislawrence.ca">
-    <img src="/shared-footer/logo-portrait.png" alt="Chris Lawrence" class="footer-logo"
-         width="32" height="32" loading="lazy" onerror="this.remove()">
+    <img src="/shared-footer/logo-portrait.png" alt="Chris Lawrence" class="footer-logo" width="32" height="32">
     <span class="footer-home-link-text">Back to chrislawrence.ca</span>
   </a>
 </footer>
 
 <div id="note-lists" hidden></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="/vendor/qrcode-2.0.4.js?v=__BUILD_ID__" defer></script>
 <script type="module" src="/js/app.js?v=__BUILD_ID__"></script>
 </body>
 </html>

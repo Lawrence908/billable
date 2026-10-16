@@ -104,7 +104,7 @@ test("transfer import matches existing clients by name, case-insensitively", asy
 });
 
 test("a transfer link that inflates into something huge is refused", async () => {
-  const { compress } = await import("../src/js/crypto.js");
+  const { compress } = await import("../src/js/bytes.js");
   const bomb = await compress(new Uint8Array(5 * 1024 * 1024).fill(32), "deflate-raw");
   await assert.rejects(decodeTransfer(`https://x/#import=z${toB64u(bomb)}`), /too large/);
 });

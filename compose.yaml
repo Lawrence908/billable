@@ -14,11 +14,10 @@ services:
       args:
         BUILD_TIME: ${BUILD_TIME:-unknown}
         BUILD_ID: ${BUILD_ID:-0}
+        ENABLE_SYNC: ${ENABLE_SYNC:-false}
     image: billable:latest
     container_name: billable
     restart: unless-stopped
-    depends_on:
-      - billable-api
     networks:
       - web
       - backend
@@ -39,9 +38,11 @@ services:
       retries: 3
       start_period: 10s
 
-  # Encrypted sync mailboxes. No host port and not on the shared network:
-  # reachable only through the front container's /api/ prefix.
+  # Encrypted sync mailboxes. Only runs with ENABLE_SYNC=true (the "sync"
+  # profile; deploy.sh selects it). No host port and not on the shared
+  # network: reachable only through the front container's /api/ prefix.
   billable-api:
+    profiles: ["sync"]
     build:
       context: ./api
       dockerfile: Dockerfile

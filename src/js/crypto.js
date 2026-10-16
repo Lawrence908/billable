@@ -17,7 +17,10 @@
 // cannot present the access key, so there is nothing to attack offline
 // without first breaking into the server.
 
+import { fromB64u, toB64u, compress, decompress } from "./bytes.js";
 import { normalise } from "./model.js";
+
+export { fromB64u, toB64u };
 
 const te = new TextEncoder();
 const td = new TextDecoder();
@@ -27,51 +30,6 @@ const KDF_ROUNDS = 600000; // OWASP 2023 guidance for PBKDF2-HMAC-SHA256
 const AAD = te.encode("billable-sync-v1");
 export const KDF_VERSION = 2;
 const PHRASE_WORDS = 6;
-
-/* ---------- bytes ---------- */
-
-export function toB64u(bytes) {
-  let s = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-export function fromB64u(str) {
-  const b64 = str.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(str.length / 4) * 4, "=");
-  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-}
-
-// Returns null where CompressionStream is missing, so callers can fall back.
-export async function compress(bytes, format) {
-  if (typeof CompressionStream === "undefined") return null;
-  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream(format));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
-}
-
-// Stops at `limit` output bytes, so a small crafted input cannot inflate into
-// something that exhausts memory (a decompression bomb).
-export async function decompress(bytes, format, limit = 4 * 1024 * 1024) {
-  const reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream(format)).getReader();
-  const chunks = [];
-  let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.length;
-    if (size > limit) {
-      await reader.cancel();
-      throw new Error("decompressed data is too large");
-    }
-    chunks.push(value);
-  }
-  const out = new Uint8Array(size);
-  let at = 0;
-  for (const c of chunks) {
-    out.set(c, at);
-    at += c.length;
-  }
-  return out;
-}
 
 /* ---------- passphrases ---------- */
 
