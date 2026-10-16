@@ -3,9 +3,10 @@
 // this file is the thin layer that connects them to the DOM.
 
 import {
-  activeClients, atTime, clientById, clientByName, clock, csvFor, dayBounds, dayKey, endAfter,
-  existingClients, existingSessions, fmtHM, fmtHMS, fmtHours, merge, newId, normalise, prettyDay, roundHalf,
-  runningFor, shiftDay, summaryRows, summaryText, totalsFor,
+  CATEGORIES, activeClients, atTime, clientById, clientByName, clock, csvFor, dayBounds, dayKey, endAfter,
+  existingClients, existingSessions, fmtHM, fmtHMS, fmtHours, merge, newId, normalise, noteSuggestions,
+  prettyDay, retagClient, retagSession, runningFor, shiftDay, stopAt, summaryRows, summaryText, tagLabel,
+  toggleTimer, totalsFor,
 } from "./model.js";
 import { KDF_VERSION, deriveKeys, generatePhrase, normalisePhrase, phraseProblem } from "./crypto.js";
 import { createSyncer, mailboxClient } from "./sync.js";
@@ -14,6 +15,7 @@ import { applyTransfer, buildTransfer, decodeTransfer, encodeTransfer } from "./
 const STATE_KEY = "billable.v1";
 const SYNC_KEY = "billable.sync";
 const TIP_KEY = "billable.tip-dismissed";
+const EXPANDED_KEY = "billable.expanded"; // which cards show their detail panel; this device only
 const BUILD = document.querySelector('meta[name="build"]').content;
 const TRANSFER_MAX = 1400; // link characters; beyond this a QR code is hard to scan off a screen
 
@@ -104,25 +106,35 @@ function addClient(name) {
   requestPersist();
 }
 
-// Stopping uses max(now, start): the timer may have been started on a device
-// whose clock runs ahead of this one.
-function stop(session, now) {
-  session.end = Math.max(now, session.start);
-  session.updated = now;
+function toggle(clientId) {
+  state = toggleTimer(state, clientId, Date.now(), newId);
+  commit();
 }
 
-function toggle(clientId) {
-  const now = Date.now();
-  const running = runningFor(state, clientId);
-  if (running) {
-    stop(running, now);
-  } else {
-    if (!state.settings.allowOverlap) {
-      for (const s of existingSessions(state)) if (s.end === null) stop(s, now);
-    }
-    state.sessions.push({ id: newId(now), clientId, start: now, end: null, updated: now });
-  }
+// Picking a new category clears the note, which belonged to the old one.
+function setClientTag(clientId, category, note) {
+  state = retagClient(state, clientId, category, note, Date.now(), newId);
   commit();
+}
+
+function setSessionTag(sessionId, category, note) {
+  state = retagSession(state, sessionId, category, note, Date.now());
+  commit();
+}
+
+const expanded = new Set((() => {
+  try {
+    return JSON.parse(storage.get(EXPANDED_KEY) || "[]");
+  } catch {
+    return [];
+  }
+})());
+
+function toggleExpanded(clientId) {
+  if (expanded.has(clientId)) expanded.delete(clientId);
+  else expanded.add(clientId);
+  storage.set(EXPANDED_KEY, JSON.stringify([...expanded]));
+  render();
 }
 
 function renameClient(clientId) {
@@ -140,7 +152,7 @@ function archiveClient(clientId) {
   const now = Date.now();
   const c = clientById(state, clientId);
   const running = runningFor(state, clientId);
-  if (running) stop(running, now);
+  if (running) stopAt(running, now);
   c.archived = true;
   c.updated = now;
   commit();
@@ -197,7 +209,8 @@ function addEntry(clientId, startHM, endHM) {
   if (startHM === endHM) return toast("Start and end are the same time.");
   const start = atTime(viewDay, startHM);
   if (start > Date.now()) return toast("Start cannot be in the future.");
-  state.sessions.push({ id: newId(), clientId, start, end: endAfter(start, endHM), updated: Date.now() });
+  const { category, note } = clientById(state, clientId); // the card's current tag
+  state.sessions.push({ id: newId(), clientId, start, end: endAfter(start, endHM), category, note, updated: Date.now() });
   commit();
   $("entry-start").value = "";
   $("entry-end").value = "";
@@ -236,7 +249,7 @@ function useSync(config) {
     setState: (next) => {
       state = next;
       saveState();
-      render();
+      renderSoon();
     },
     onStatus: renderSync,
   });
@@ -422,6 +435,52 @@ function el(tag, props = {}, ...kids) {
 
 /* ---------- rendering ---------- */
 
+// Redraws replace the DOM, which would throw away a half-typed note. Changes
+// that arrive on their own (a sync, the minute tick) wait until the field loses focus.
+let renderPending = false;
+const typing = () => document.activeElement?.matches("input, select") ?? false;
+function renderSoon() {
+  if (typing()) renderPending = true;
+  else render();
+}
+document.addEventListener("focusout", () => {
+  setTimeout(() => {
+    if (renderPending && !typing()) {
+      renderPending = false;
+      render();
+    }
+  });
+});
+
+// One shared <datalist> of past notes per category, for every note box.
+function renderNoteLists() {
+  $("note-lists").replaceChildren(...CATEGORIES.map((cat) =>
+    el("datalist", { id: `notes-${cat.key}` }, ...noteSuggestions(state, cat.key).map((n) => el("option", { value: n })))));
+}
+
+// A category dropdown and a note box. The note only opens once a category is
+// chosen, and suggests what has been typed under that category before.
+function tagControls({ category, note, onCategory, onNote, label }) {
+  const select = el("select", { class: "tag-category", "aria-label": `${label}: category`, onchange: (e) => onCategory(e.target.value) },
+    el("option", { value: "", text: "No category" }),
+    ...CATEGORIES.map((c) => el("option", { value: c.key, text: c.label })));
+  select.value = category;
+  const input = el("input", {
+    type: "text",
+    class: "tag-note",
+    maxlength: "80",
+    placeholder: category ? "Note (optional)" : "Pick a category first",
+    disabled: !category,
+    list: category ? `notes-${category}` : null,
+    autocomplete: "off",
+    "aria-label": `${label}: note`,
+    onchange: (e) => onNote(e.target.value),
+    onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); },
+  });
+  input.value = note;
+  return el("div", { class: "tag-controls" }, select, input);
+}
+
 function renderHeader(now) {
   const today = dayKey(now);
   const total = [...totalsFor(state, today, now).values()].reduce((a, b) => a + b, 0);
@@ -435,17 +494,25 @@ function renderHeader(now) {
 }
 
 function renderClients(now) {
-  const per = totalsFor(state, dayKey(now), now);
+  const today = dayKey(now);
+  const per = totalsFor(state, today, now);
+  const hours = new Map(summaryRows(state, today, now).map((r) => [r.client.id, r.hours]));
   const active = activeClients(state);
   $("clients-empty").hidden = active.length > 0;
   $("clients").replaceChildren(...active.map((c) => {
     const running = runningFor(state, c.id);
     const ms = per.get(c.id) || 0;
+    const open = expanded.has(c.id);
+    const tag = tagLabel(c.category, c.note);
     const meta = running
       ? el("div", { class: "client-meta" }, el("span", { class: "pulse", "aria-hidden": "true" }), `Running since ${clock(running.start)}`)
-      : el("div", { class: "client-meta", text: ms ? `${fmtHours(roundHalf(ms))} h today` : "Not started today" });
-    return el("li", { class: `client${running ? " running" : ""}` },
-      el("div", {}, el("div", { class: "client-name", text: c.name }), meta),
+      : el("div", { class: "client-meta", text: ms ? `${fmtHours(hours.get(c.id) || 0)} h today` : "Not started today" });
+    const panelId = `more-${c.id}`;
+    return el("li", { class: `client${running ? " running" : ""}${open ? " open" : ""}` },
+      el("div", {},
+        el("div", { class: "client-name", text: c.name }),
+        tag ? el("div", { class: "client-tag", title: "Time on this card goes to", text: tag }) : null,
+        meta),
       el("div", { class: "client-time digits", "data-live": c.id, text: running ? fmtHMS(ms) : fmtHM(ms) }),
       el("button", {
         type: "button",
@@ -455,8 +522,27 @@ function renderClients(now) {
         text: running ? "Stop" : "Start",
       }),
       el("div", { class: "client-tools" },
+        el("button", {
+          type: "button",
+          class: "btn more-toggle",
+          "aria-expanded": String(open),
+          "aria-controls": panelId,
+          onclick: () => toggleExpanded(c.id),
+          text: open ? "Less" : "More",
+        }),
         el("button", { type: "button", class: "btn", onclick: () => renameClient(c.id), text: "Rename" }),
-        el("button", { type: "button", class: "btn", onclick: () => archiveClient(c.id), text: "Remove" })));
+        el("button", { type: "button", class: "btn", onclick: () => archiveClient(c.id), text: "Remove" })),
+      open ? el("div", { class: "client-more", id: panelId },
+        tagControls({
+          category: c.category,
+          note: c.note,
+          label: c.name,
+          onCategory: (cat) => setClientTag(c.id, cat, ""),
+          onNote: (note) => setClientTag(c.id, c.category, note),
+        }),
+        el("p", { class: "note", text: running
+          ? "Changing these splits the running timer here: time so far keeps the old label."
+          : "The next timer you start on this card is labelled with these." })) : null);
   }));
 }
 
@@ -466,11 +552,17 @@ function renderSummary(now) {
   if (!rows.length) {
     body.replaceChildren(el("tr", { class: "none" }, el("td", { colspan: "3", text: "No time recorded on this day." })));
   } else {
-    body.replaceChildren(...rows.map((r) => el("tr", {},
-      el("td", {}, r.client.name,
-        runningFor(state, r.client.id) ? el("span", { class: "pulse trailing", title: "Timer running" }) : null),
-      el("td", { class: "num", text: fmtHM(r.ms) }),
-      el("td", { class: "num billable", text: fmtHours(r.hours) }))));
+    body.replaceChildren(...rows.flatMap((r) => [
+      el("tr", { class: r.detailed ? "client-row detailed" : "client-row" },
+        el("td", {}, r.client.name,
+          runningFor(state, r.client.id) ? el("span", { class: "pulse trailing", title: "Timer running" }) : null),
+        el("td", { class: "num", text: fmtHM(r.ms) }),
+        el("td", { class: "num billable", text: fmtHours(r.hours) })),
+      ...(r.detailed ? r.lines.map((l) => el("tr", { class: "line-row" },
+        el("td", { text: l.label }),
+        el("td", { class: "num", text: fmtHM(l.ms) }),
+        el("td", { class: "num", text: fmtHours(l.hours) }))) : []),
+    ]));
   }
   $("sum-exact").textContent = fmtHM(rows.reduce((a, r) => a + r.ms, 0));
   $("sum-rounded").textContent = fmtHours(rows.reduce((a, r) => a + r.hours, 0));
@@ -482,6 +574,9 @@ function renderLog(now) {
     .filter((s) => s.start < to && (s.end === null ? now : s.end) > from)
     .sort((a, b) => a.start - b.start);
   $("log-empty").hidden = entries.length > 0;
+  // Tag controls appear on entries only once someone uses categories, so the
+  // simple version of the page stays simple.
+  const tagging = existingClients(state).some((c) => c.category) || existingSessions(state).some((s) => s.category);
   $("log").replaceChildren(...entries.map((s) => {
     const c = clientById(state, s.clientId);
     return el("li", { class: "entry" },
@@ -494,7 +589,14 @@ function renderLog(now) {
         ? el("span", { class: "live", text: "running" })
         : el("input", { type: "time", value: clock(s.end), "aria-label": "End time", onchange: (e) => editSession(s.id, "end", e.target.value) }),
       el("span", { class: "dur digits", "data-entry": s.id, text: fmtHM((s.end === null ? now : s.end) - s.start) }),
-      el("button", { type: "button", class: "btn btn-small btn-danger", "aria-label": "Delete entry", onclick: () => deleteSession(s.id), text: "✕" }));
+      el("button", { type: "button", class: "btn btn-small btn-danger", "aria-label": "Delete entry", onclick: () => deleteSession(s.id), text: "✕" }),
+      tagging ? tagControls({
+        category: s.category,
+        note: s.note,
+        label: `${c.name} entry at ${clock(s.start)}`,
+        onCategory: (cat) => setSessionTag(s.id, cat, ""),
+        onNote: (note) => setSessionTag(s.id, s.category, note),
+      }) : null);
   }));
 
   const select = $("entry-client");
@@ -568,6 +670,7 @@ function renderTip() {
 
 function render() {
   const now = Date.now();
+  renderNoteLists();
   renderHeader(now);
   renderClients(now);
   renderSummary(now);

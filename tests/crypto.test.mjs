@@ -117,6 +117,17 @@ test("archived clients arrive archived", async () => {
   assert.equal(r.state.clients.find((c) => c.name === "Acme Corp").archived, true);
 });
 
+test("categories and notes survive a transfer link", async () => {
+  const now = Date.UTC(2026, 9, 15, 20);
+  const tagged = normalise({ ...sample, sessions: [
+    { ...sample.sessions[0], category: "p3", note: "Framing review" },
+    { id: "t", clientId: "b", start: Date.UTC(2026, 9, 15, 19), end: Date.UTC(2026, 9, 15, 19, 30), category: "gaps", note: "", updated: 1 },
+  ] });
+  const p = await decodeTransfer(await encodeTransfer(buildTransfer(tagged, now, 30).payload, "https://x"));
+  const r = applyTransfer(normalise({}), p, now, (() => { let n = 0; return () => `n${n++}`; })());
+  assert.deepEqual(r.state.sessions.map((s) => [s.category, s.note]).sort(), [["gaps", ""], ["p3", "Framing review"]]);
+});
+
 test("a damaged transfer link is refused", async () => {
   await assert.rejects(decodeTransfer("https://x/#import=zAAAA"));
   await assert.rejects(decodeTransfer("https://x/#nothing"));

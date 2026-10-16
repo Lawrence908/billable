@@ -9,7 +9,7 @@
 import { readFileSync } from "node:fs";
 import { chromium } from "playwright";
 
-const URL = (process.argv[2] || "http://localhost:8175").replace(/\/$/, "") + "/";
+const BASE = (process.argv[2] || "http://localhost:8175").replace(/\/$/, "") + "/";
 const results = [];
 let failed = 0;
 
@@ -26,7 +26,7 @@ async function device(name) {
   const p = await ctx.newPage();
   p.on("pageerror", (e) => errors.push(`${name}: ${e.message}`));
   p.on("dialog", (d) => d.accept());
-  await p.goto(URL);
+  await p.goto(BASE);
   return { ctx, p };
 }
 
@@ -106,10 +106,10 @@ try {
   await A.p.click("#sync-qr-btn");
   await A.p.waitForSelector("#sync-qr-code svg");
   const C = await device("C");
-  await C.p.goto(`${URL}#sync=${shown.split(" ").join("-")}`);
+  await C.p.goto(`${BASE}#sync=${shown.split(" ").join("-")}`);
   await synced(C.p);
   check("a QR sync link connects a device and leaves the address bar clean",
-    C.p.url() === URL && (await clients(C.p)).length === 3);
+    C.p.url() === BASE && (await clients(C.p)).length === 3);
 
   await A.p.click("#move-wrap > summary");
   await A.p.click("#move-make");
@@ -146,6 +146,51 @@ try {
   const [download] = await Promise.all([E.p.waitForEvent("download"), E.p.click("#csv-btn")]);
   const row = readFileSync(await download.path(), "utf8").split("\r\n")[1] || "";
   check("CSV neutralises a formula-like client name", row.includes(`"'=HYPERLINK(""x"")"`), row);
+
+  // Categories and notes on a fresh device.
+  const F = await device("F");
+  await add(F.p, "Acme Corp");
+  await add(F.p, "Northwind");
+  check("the detail panel starts closed", !(await F.p.$(".client-more")));
+  await F.p.click('.client:has-text("Acme Corp") .more-toggle');
+  check("the note box is disabled until a category is chosen", await F.p.isDisabled('.client:has-text("Acme Corp") .tag-note'));
+  await F.p.selectOption('.client:has-text("Acme Corp") .tag-category', "p3");
+  await F.p.fill('.client:has-text("Acme Corp") .tag-note', "Framing review");
+  await F.p.press('.client:has-text("Acme Corp") .tag-note', "Enter");
+  await F.p.waitForTimeout(200);
+  check("the card shows what its time goes to", (await F.p.textContent('.client:has-text("Acme Corp") .client-tag')) === "P3 · Framing review");
+  await F.p.click('button[aria-label="Start Acme Corp"]');
+  // Pretend the timer has run for 40 minutes, then switch category mid-timer.
+  await F.p.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem("billable.v1"));
+    for (const x of s.sessions) if (x.end === null) x.start -= 40 * 60e3;
+    localStorage.setItem("billable.v1", JSON.stringify(s));
+  });
+  await F.p.reload();
+  await F.p.selectOption('.client:has-text("Acme Corp") .tag-category', "gaps");
+  await F.p.waitForTimeout(200);
+  const parts = await F.p.evaluate(() => JSON.parse(localStorage.getItem("billable.v1")).sessions
+    .filter((s) => !s.deleted).sort((a, b) => a.start - b.start).map((s) => `${s.category}:${s.note}:${s.end === null ? "running" : "stopped"}`));
+  check("changing category mid-timer splits the time", JSON.stringify(parts) === JSON.stringify(["p3:Framing review:stopped", "gaps::running"]), JSON.stringify(parts));
+  check("the summary breaks the client down by line",
+    JSON.stringify(await F.p.$$eval("#summary .line-row td:first-child", (tds) => tds.map((t) => t.textContent))) === JSON.stringify(["P3 · Framing review", "Gaps"]));
+  await F.p.click('.client:has-text("Northwind") .more-toggle');
+  await F.p.selectOption('.client:has-text("Northwind") .tag-category', "p3");
+  const suggested = await F.p.$$eval("#notes-p3 option", (os) => os.map((o) => o.value));
+  check("notes typed under a category are suggested for other clients", suggested.includes("Framing review"), JSON.stringify(suggested));
+  await F.p.click("#log-wrap > summary");
+  const entryTags = await F.p.$$eval("#log .entry .tag-category", (ss) => ss.map((s) => s.value));
+  check("fix times shows each entry's category", JSON.stringify(entryTags) === JSON.stringify(["p3", "gaps"]), JSON.stringify(entryTags));
+  await F.p.selectOption("#log .entry >> nth=0 >> .tag-category", "tech");
+  await F.p.waitForTimeout(200);
+  check("a past entry can be retagged",
+    (await F.p.$$eval("#summary .line-row td:first-child", (tds) => tds.map((t) => t.textContent))).includes("Tech"));
+  await F.p.click(".settings > summary");
+  const [csvDl] = await Promise.all([F.p.waitForEvent("download"), F.p.click("#csv-btn")]);
+  const csvRows = readFileSync(await csvDl.path(), "utf8").trim().split("\r\n");
+  check("CSV has one row per line with category and note columns",
+    csvRows[0] === "date,client,category,note,tracked_hours,hours" && csvRows.some((r) => r.includes('"Acme Corp","Tech"')), csvRows.slice(0, 3).join(" | "));
+  await F.p.screenshot({ path: new URL("../../screenshots/categories-390.png", import.meta.url).pathname, fullPage: true });
 
   await A.p.click("#sync-delete");
   await A.p.waitForTimeout(500);

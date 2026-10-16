@@ -9,6 +9,24 @@ no build step, and no runtime dependencies.
 
 <img src="screenshots/mobile-390.png" alt="Billable on a phone: three clients, one timer running, and the day summary" width="300">
 
+## Categories and notes (optional)
+
+Each client card has a **More** button that opens a category dropdown (P0 to P8,
+Project Management, Gaps, Internal, Tech) and a note box. The running timer, and the
+next one started on that card, are labelled with them.
+
+- Changing the category or note mid-timer splits the time at that moment, so the time
+  so far keeps the old label. Within the first minute it relabels the entry instead,
+  so a quick correction leaves no near-empty fragment.
+- The note box suggests every note used before under that category, across all
+  clients, most recent first. Suggestions are derived from history rather than stored
+  separately, so they build up and sync on their own.
+- The summary, email and CSV list each client with one line per category and note.
+  **Each line is rounded to 0.5 h on its own**, because each is entered separately at
+  work, and the client total is the sum of its lines. A client tracked without
+  categories reads exactly as before.
+- Under Fix times, entries can be retagged when a switch was forgotten.
+
 ## Privacy model
 
 Billable is built so the server never holds anything readable about you.

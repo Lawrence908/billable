@@ -11,6 +11,26 @@
 export const MINUTE = 60e3;
 export const HOUR = 60 * MINUTE;
 
+// Optional detail on a timer: a fixed category, plus a free-text note that
+// only exists under a category.
+export const CATEGORIES = [
+  ...Array.from({ length: 9 }, (_, i) => ({ key: `p${i}`, label: `P${i}` })),
+  { key: "pm", label: "Project Management" },
+  { key: "gaps", label: "Gaps" },
+  { key: "internal", label: "Internal" },
+  { key: "tech", label: "Tech" },
+];
+const CATEGORY_KEYS = new Set(CATEGORIES.map((c) => c.key));
+
+export const categoryLabel = (key) => CATEGORIES.find((c) => c.key === key)?.label || "";
+export const tagLabel = (category, note) =>
+  !category ? "" : note ? `${categoryLabel(category)} · ${note}` : categoryLabel(category);
+
+function cleanTag(category, note) {
+  const cat = CATEGORY_KEYS.has(category) ? category : "";
+  return { category: cat, note: cat ? String(note || "").trim().slice(0, 80) : "" };
+}
+
 // Time-prefixed, so sorting by id lists clients in the order they were added.
 export function newId(now = Date.now()) {
   const tail = Array.from(crypto.getRandomValues(new Uint8Array(5)), (b) => b.toString(36).padStart(2, "0")).join("");
@@ -37,7 +57,9 @@ export function normalise(d) {
     if (!c || typeof c.id !== "string") continue;
     if (c.deleted) out.clients.push({ id: c.id, deleted: true, updated: when(c.updated) });
     else if (typeof c.name === "string") {
-      out.clients.push({ id: c.id, name: c.name.slice(0, 80), archived: !!c.archived, updated: when(c.updated) });
+      // category/note on a client is the card's current selection: what the
+      // next timer started on it is tagged with.
+      out.clients.push({ id: c.id, name: c.name.slice(0, 80), archived: !!c.archived, ...cleanTag(c.category, c.note), updated: when(c.updated) });
     }
   }
   for (const s of Array.isArray(d.sessions) ? d.sessions : []) {
@@ -52,7 +74,7 @@ export function normalise(d) {
     // An end before the start happens when a timer is stopped on a device
     // whose clock is behind the one that started it. Keep the entry, at zero.
     const end = s.end === null ? null : Math.max(s.end, s.start);
-    out.sessions.push({ id: s.id, clientId, start: s.start, end, updated: when(s.updated) });
+    out.sessions.push({ id: s.id, clientId, start: s.start, end, ...cleanTag(s.category, s.note), updated: when(s.updated) });
   }
   out.clients.sort(byId);
   out.sessions.sort(byId);
@@ -152,33 +174,72 @@ export const roundHalf = (ms) => Math.round((ms / HOUR) * 2) / 2;
 
 /* ---------- totals ---------- */
 
-// A client's time on a day is the overlap of its sessions with that local day,
-// so a stretch across midnight is split between the two days.
+// A session's time on a day is its overlap with that local day, so a stretch
+// across midnight is split between the two days. Null when it does not touch
+// the day; zero for a timer started that day this very moment.
+function dayShare(s, from, to, now) {
+  const end = s.end === null ? now : s.end;
+  const ms = Math.max(0, Math.min(end, to) - Math.max(s.start, from));
+  const startedThatDay = s.start >= from && s.start < to;
+  return ms > 0 || (s.end === null && startedThatDay) ? ms : null;
+}
+
 export function totalsFor(st, key, now) {
   const [from, to] = dayBounds(key);
   const per = new Map();
   for (const s of existingSessions(st)) {
-    const end = s.end === null ? now : s.end;
-    const ms = Math.max(0, Math.min(end, to) - Math.max(s.start, from));
-    const startedToday = s.start >= from && s.start < to;
-    if (ms > 0 || (s.end === null && startedToday)) per.set(s.clientId, (per.get(s.clientId) || 0) + ms);
+    const ms = dayShare(s, from, to, now);
+    if (ms !== null) per.set(s.clientId, (per.get(s.clientId) || 0) + ms);
   }
   return per;
 }
 
+const categoryOrder = (key) => {
+  const i = CATEGORIES.findIndex((c) => c.key === key);
+  return i < 0 ? CATEGORIES.length : i; // untagged time sorts last
+};
+
+// One row per client, each with lines per category + note. Every line is
+// rounded on its own, because each is entered separately at work; the client
+// total is the sum of its rounded lines.
 export function summaryRows(st, key, now) {
-  const per = totalsFor(st, key, now);
+  const [from, to] = dayBounds(key);
+  const perClient = new Map();
+  for (const s of existingSessions(st)) {
+    const ms = dayShare(s, from, to, now);
+    if (ms === null) continue;
+    if (!perClient.has(s.clientId)) perClient.set(s.clientId, new Map());
+    const lines = perClient.get(s.clientId);
+    const k = `${s.category}\u0000${s.note.toLowerCase()}`;
+    if (!lines.has(k)) lines.set(k, { category: s.category, note: s.note, ms: 0 });
+    lines.get(k).ms += ms;
+  }
   return existingClients(st)
-    .filter((c) => per.has(c.id))
-    .map((c) => ({ client: c, ms: per.get(c.id), hours: roundHalf(per.get(c.id)) }));
+    .filter((c) => perClient.has(c.id))
+    .map((c) => {
+      const lines = [...perClient.get(c.id).values()]
+        .map((l) => ({ ...l, label: tagLabel(l.category, l.note) || "No category", hours: roundHalf(l.ms) }))
+        .sort((a, b) => categoryOrder(a.category) - categoryOrder(b.category) || a.note.localeCompare(b.note));
+      return {
+        client: c,
+        ms: lines.reduce((a, l) => a + l.ms, 0),
+        hours: lines.reduce((a, l) => a + l.hours, 0),
+        lines,
+        // A client tracked without any category reads exactly as before: one line.
+        detailed: lines.some((l) => l.category),
+      };
+    });
 }
 
 export function summaryText(st, key, now) {
   const rows = summaryRows(st, key, now);
   const lines = [`Hours for ${prettyDay(key)}`, ""];
   if (!rows.length) lines.push("No time recorded.");
-  for (const r of rows) lines.push(`${r.client.name}: ${fmtHours(r.hours)} h`);
-  lines.push("", `Total: ${fmtHours(rows.reduce((a, r) => a + r.hours, 0))} h`, "(Rounded to the nearest 0.5 h per client.)");
+  for (const r of rows) {
+    lines.push(`${r.client.name}: ${fmtHours(r.hours)} h`);
+    if (r.detailed) for (const l of r.lines) lines.push(`  ${l.label}: ${fmtHours(l.hours)} h`);
+  }
+  lines.push("", `Total: ${fmtHours(rows.reduce((a, r) => a + r.hours, 0))} h`, "(Rounded to the nearest 0.5 h per line.)");
   if (existingSessions(st).some((s) => s.end === null)) lines.push("Note: a timer was still running when this was generated.");
   return lines.join("\n");
 }
@@ -187,11 +248,85 @@ export function csvFor(st, key, now) {
   // A leading = + - @ makes spreadsheets run the cell as a formula, and names
   // can arrive from an imported link or backup, so neutralise them.
   const quote = (v) => `"${String(v).replace(/^[=+\-@\t\r]/, "'$&").replace(/"/g, '""')}"`;
-  const lines = ["date,client,tracked_hours,hours"];
+  const out = ["date,client,category,note,tracked_hours,hours"];
   for (const r of summaryRows(st, key, now)) {
-    lines.push([key, quote(r.client.name), (r.ms / HOUR).toFixed(2), fmtHours(r.hours)].join(","));
+    for (const l of r.lines) {
+      out.push([key, quote(r.client.name), quote(categoryLabel(l.category)), quote(l.note), (l.ms / HOUR).toFixed(2), fmtHours(l.hours)].join(","));
+    }
   }
-  return lines.join("\r\n") + "\r\n";
+  return out.join("\r\n") + "\r\n";
+}
+
+// Notes used before under a category, across all clients, most recent first.
+// Derived from history rather than stored, so it builds up and syncs by itself.
+export function noteSuggestions(st, category, limit = 25) {
+  if (!category) return [];
+  const seen = new Map();
+  const consider = (note, when) => {
+    if (!note) return;
+    const k = note.toLowerCase();
+    if (!seen.has(k) || when > seen.get(k).when) seen.set(k, { note, when });
+  };
+  for (const s of existingSessions(st)) if (s.category === category) consider(s.note, s.start);
+  for (const c of existingClients(st)) if (c.category === category) consider(c.note, c.updated);
+  return [...seen.values()].sort((a, b) => b.when - a.when).slice(0, limit).map((x) => x.note);
+}
+
+/* ---------- timer actions ---------- */
+//
+// Each takes a state and returns a new one. `makeId(now)` supplies ids, so
+// tests can make them predictable.
+
+// max(now, start): the timer may have been started on a device whose clock
+// runs ahead of this one.
+export function stopAt(session, now) {
+  session.end = Math.max(now, session.start);
+  session.updated = now;
+}
+
+export function toggleTimer(st, clientId, now, makeId) {
+  const out = normalise(st);
+  const running = runningFor(out, clientId);
+  if (running) {
+    stopAt(running, now);
+    return out;
+  }
+  if (!out.settings.allowOverlap) {
+    for (const s of existingSessions(out)) if (s.end === null) stopAt(s, now);
+  }
+  const { category, note } = clientById(out, clientId);
+  out.sessions.push({ id: makeId(now), clientId, start: now, end: null, category, note, updated: now });
+  return normalise(out);
+}
+
+// Within this long of starting, a change of category or note relabels the
+// running entry instead of splitting off a near-empty one.
+export const RETAG_GRACE = MINUTE;
+
+// Changes a card's category/note. A running timer is split at `now`, so the
+// time so far stays with the old tag and the rest goes to the new one.
+export function retagClient(st, clientId, category, note, now, makeId) {
+  const out = normalise(st);
+  const c = clientById(out, clientId);
+  const tag = cleanTag(category, note);
+  if (c.category === tag.category && c.note === tag.note) return out;
+  Object.assign(c, tag, { updated: now });
+  const running = runningFor(out, clientId);
+  if (running && now - running.start < RETAG_GRACE) {
+    Object.assign(running, tag, { updated: now });
+  } else if (running) {
+    stopAt(running, now);
+    out.sessions.push({ id: makeId(now), clientId, start: now, end: null, ...tag, updated: now });
+  }
+  return normalise(out);
+}
+
+// Fixes the tag on a past entry, for when switching was forgotten.
+export function retagSession(st, sessionId, category, note, now) {
+  const out = normalise(st);
+  const s = existingSessions(out).find((x) => x.id === sessionId);
+  if (s) Object.assign(s, cleanTag(category, note), { updated: now });
+  return normalise(out);
 }
 
 /* ---------- merge ---------- */

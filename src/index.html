@@ -80,7 +80,7 @@
       <tbody></tbody>
       <tfoot><tr><th>Total</th><th class="num" id="sum-exact">0:00</th><th class="num" id="sum-rounded">0.0</th></tr></tfoot>
     </table>
-    <p class="note">Hours are rounded to the nearest 0.5 for each client.</p>
+    <p class="note">Hours are rounded to the nearest 0.5 for each line. A client tracked with categories gets one line per category and note.</p>
 
     <div class="send">
       <div class="send-row">
@@ -218,6 +218,7 @@
   </a>
 </footer>
 
+<div id="note-lists" hidden></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script type="module" src="/js/app.js?v=__BUILD_ID__"></script>
 </body>

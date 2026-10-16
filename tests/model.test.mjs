@@ -4,7 +4,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   atTime, csvFor, dayBounds, dayKey, endAfter, existingSessions, fmtHM, merge, normalise,
-  pruneTombstones, roundHalf, sameData, settleRunning, shiftDay, summaryRows, summaryText, totalsFor,
+  noteSuggestions, pruneTombstones, retagClient, retagSession, roundHalf, sameData, settleRunning, shiftDay,
+  summaryRows, summaryText, toggleTimer, totalsFor,
 } from "../src/js/model.js";
 
 const MIN = 60e3;
@@ -72,7 +73,7 @@ test("summary rounds per client and totals the rounded figures", () => {
   assert.match(text, /Acme: 2\.0 h/);
   assert.match(text, /Northwind: 0\.5 h/);
   assert.match(text, /Total: 2\.5 h/);
-  assert.equal(csvFor(st, k, 0).split("\r\n")[1], `${k},"Acme",2.17,2.0`);
+  assert.equal(csvFor(st, k, 0).split("\r\n")[1], `${k},"Acme","","",2.17,2.0`);
 });
 
 test("CSV neutralises names a spreadsheet would run as a formula", () => {
@@ -80,6 +81,7 @@ test("CSV neutralises names a spreadsheet would run as a formula", () => {
   const st = day([["a", "=HYPERLINK(1)"], ["b", "+1"], ["c", "-x"], ["d", "@SUM"]],
     ["a", "b", "c", "d"].map((c, i) => [String(i), c, at(k, "08:00"), at(k, "09:00")]));
   const names = csvFor(st, k, 0).trim().split("\r\n").slice(1).map((l) => l.split(",")[1]);
+  assert.equal(names.length, 4);
   assert.deepEqual(names, [`"'=HYPERLINK(1)"`, `"'+1"`, `"'-x"`, `"'@SUM"`]);
 });
 
@@ -114,7 +116,7 @@ test("merge collapses same-named clients into the oldest one", () => {
 test("CSV quotes client names that contain quotes and commas", () => {
   const k = "2026-10-15";
   const st = day([["a", 'Smith, "Jr" & Co']], [["1", "a", at(k, "08:00"), at(k, "09:00")]]);
-  assert.equal(csvFor(st, k, 0).split("\r\n")[1], `${k},"Smith, ""Jr"" & Co",1.00,1.0`);
+  assert.equal(csvFor(st, k, 0).split("\r\n")[1], `${k},"Smith, ""Jr"" & Co","","",1.00,1.0`);
 });
 
 test("normalise reads the first version's jobs/jobId shape and drops junk", () => {
@@ -126,10 +128,10 @@ test("normalise reads the first version's jobs/jobId shape and drops junk", () =
       { id: "s3", jobId: "j1", start: "noon", end: null },
     ],
   });
-  assert.deepEqual(st.clients, [{ id: "j1", name: "Old job", archived: false, updated: 0 }]);
+  assert.deepEqual(st.clients, [{ id: "j1", name: "Old job", archived: false, category: "", note: "", updated: 0 }]);
   assert.deepEqual(st.sessions, [
-    { id: "s1", clientId: "j1", start: 1000, end: 2000, updated: 0 },
-    { id: "s2", clientId: "j1", start: 3000, end: 3000, updated: 0 }, // kept, clamped to zero length
+    { id: "s1", clientId: "j1", start: 1000, end: 2000, category: "", note: "", updated: 0 },
+    { id: "s2", clientId: "j1", start: 3000, end: 3000, category: "", note: "", updated: 0 }, // kept, clamped to zero length
   ]);
 });
 
@@ -188,4 +190,96 @@ test("sessions of a deleted client are hidden", () => {
 test("dayKey uses the local calendar day", () => {
   assert.equal(dayKey(at("2026-10-15", "23:59")), "2026-10-15");
   assert.equal(dayKey(at("2026-10-16", "00:00")), "2026-10-16");
+});
+
+/* ---------- categories and notes ---------- */
+
+const ids = () => { let n = 0; return () => `id${n++}`; };
+
+test("a note without a category, or an unknown category, is dropped", () => {
+  const st = normalise({
+    clients: [{ id: "a", name: "A", category: "", note: "orphan" }, { id: "b", name: "B", category: "p9", note: "x" }],
+    sessions: [{ id: "s", clientId: "a", start: 0, end: 1, category: "gaps", note: "  Site walk  " }],
+  });
+  assert.deepEqual(st.clients.map((c) => [c.category, c.note]), [["", ""], ["", ""]]);
+  assert.deepEqual([st.sessions[0].category, st.sessions[0].note], ["gaps", "Site walk"]);
+});
+
+test("starting a timer tags it with the card's current category and note", () => {
+  let st = day([["a", "Acme", { category: "p3", note: "Framing review" }]], []);
+  st = toggleTimer(st, "a", 1000, ids());
+  assert.deepEqual(existingSessions(st).map((s) => [s.category, s.note, s.end]), [["p3", "Framing review", null]]);
+  st = toggleTimer(st, "a", 5000, ids());
+  assert.equal(existingSessions(st)[0].end, 5000);
+});
+
+test("changing the tag on a running timer splits it at that moment", () => {
+  const make = ids();
+  let st = toggleTimer(day([["a", "Acme", { category: "p3" }]], []), "a", 0, make);
+  st = retagClient(st, "a", "gaps", "", 30 * MIN, make);
+  const parts = existingSessions(st).sort((x, y) => x.start - y.start);
+  assert.deepEqual(parts.map((s) => [s.category, s.start, s.end]), [["p3", 0, 30 * MIN], ["gaps", 30 * MIN, null]]);
+  assert.equal(st.clients[0].category, "gaps");
+});
+
+test("a tag change within the first minute relabels instead of splitting", () => {
+  const make = ids();
+  let st = toggleTimer(day([["a", "Acme"]], []), "a", 0, make);
+  st = retagClient(st, "a", "p1", "Kickoff", 20e3, make);
+  assert.deepEqual(existingSessions(st).map((s) => [s.category, s.note, s.end]), [["p1", "Kickoff", null]]);
+});
+
+test("changing the tag with no timer running only changes the card", () => {
+  const st = retagClient(day([["a", "Acme"]], [["1", "a", 0, 10]]), "a", "tech", "Server move", 99, ids());
+  assert.deepEqual([st.clients[0].category, st.clients[0].note], ["tech", "Server move"]);
+  assert.equal(existingSessions(st)[0].category, "");
+});
+
+test("a past entry can be retagged", () => {
+  const st = retagSession(day([["a", "Acme"]], [["1", "a", 0, 10]]), "1", "pm", "Weekly call", 50);
+  assert.deepEqual([st.sessions[0].category, st.sessions[0].note, st.sessions[0].updated], ["pm", "Weekly call", 50]);
+});
+
+test("summary rounds each category + note line, and the client total sums the lines", () => {
+  const k = "2026-10-15";
+  const st = normalise({
+    clients: [{ id: "a", name: "Acme", updated: 1 }, { id: "b", name: "Beta", updated: 1 }],
+    sessions: [
+      { id: "1", clientId: "a", start: at(k, "08:00"), end: at(k, "09:00"), category: "p3", note: "Framing review", updated: 1 },
+      { id: "2", clientId: "a", start: at(k, "13:00"), end: at(k, "13:50"), category: "p3", note: "framing REVIEW", updated: 1 },
+      { id: "3", clientId: "a", start: at(k, "10:00"), end: at(k, "11:20"), category: "gaps", note: "", updated: 1 },
+      { id: "4", clientId: "a", start: at(k, "11:30"), end: at(k, "11:40"), updated: 1 },
+      { id: "5", clientId: "b", start: at(k, "14:00"), end: at(k, "15:00"), updated: 1 },
+    ],
+  });
+  const [acme, beta] = summaryRows(st, k, 0);
+  assert.deepEqual(acme.lines.map((l) => [l.label, fmtHM(l.ms), l.hours]),
+    [["P3 · Framing review", "1:50", 2], ["Gaps", "1:20", 1.5], ["No category", "0:10", 0]]);
+  assert.equal(acme.hours, 3.5);
+  assert.equal(acme.detailed, true);
+  assert.equal(beta.detailed, false);
+
+  const text = summaryText(st, k, 0);
+  assert.match(text, /Acme: 3\.5 h\n  P3 · Framing review: 2\.0 h\n  Gaps: 1\.5 h\n  No category: 0\.0 h\nBeta: 1\.0 h\n/);
+  assert.match(text, /Total: 4\.5 h/);
+
+  const csv = csvFor(st, k, 0).trim().split("\r\n");
+  assert.equal(csv[0], "date,client,category,note,tracked_hours,hours");
+  assert.equal(csv[1], `${k},"Acme","P3","Framing review",1.83,2.0`);
+  assert.equal(csv.length, 5);
+});
+
+test("note suggestions are per category, shared across clients, most recent first", () => {
+  const st = normalise({
+    clients: [{ id: "a", name: "Acme", category: "p3", note: "Punch list", updated: 50 }, { id: "b", name: "Beta", updated: 1 }],
+    sessions: [
+      { id: "1", clientId: "a", start: 10, end: 11, category: "p3", note: "Framing review", updated: 1 },
+      { id: "2", clientId: "b", start: 30, end: 31, category: "p3", note: "Drywall", updated: 1 },
+      { id: "3", clientId: "b", start: 40, end: 41, category: "p3", note: "framing review", updated: 1 },
+      { id: "4", clientId: "a", start: 60, end: 61, category: "gaps", note: "Not P3", updated: 1 },
+    ],
+  });
+  assert.deepEqual(noteSuggestions(st, "p3"), ["Punch list", "framing review", "Drywall"]);
+  assert.deepEqual(noteSuggestions(st, "tech"), []);
+  assert.deepEqual(noteSuggestions(st, ""), []);
 });
