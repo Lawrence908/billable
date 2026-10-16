@@ -234,6 +234,8 @@ input:focus-visible, select:focus-visible, .btn:focus-visible {
 }
 .panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.5rem; }
 .panel-head .section-h { margin: 0; }
+#summary-wrap .panel-head { margin-bottom: 0.25rem; }
+#summary-badge { text-transform: none; letter-spacing: 0.02em; color: var(--accent); border-color: rgba(240, 178, 62, 0.45); font-family: var(--mono); }
 .day-nav { display: flex; gap: 0.3rem; align-items: center; }
 .day-nav .btn { padding: 0.4rem 0.65rem; }
 
@@ -278,7 +280,7 @@ input:focus-visible, select:focus-visible, .btn:focus-visible {
 
 /* Privacy statement */
 .privacy {
-  margin: -0.25rem 0 1.25rem;
+  margin: 0 0 1rem;
   padding: 0.7rem 0.9rem;
   border: 1px solid rgba(79, 211, 154, 0.35);
   border-radius: var(--radius);

@@ -33,23 +33,6 @@
 </header>
 
 <main class="wrap">
-  <details class="privacy">
-    <summary>
-      <span class="privacy-head"><svg class="lock" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7.5" rx="1.5" fill="currentColor"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>Private by design.</span>
-      Your clients and hours stay on your device. With sync on, they are encrypted before they leave it, so this server cannot read them. No account, no ads, no analytics.
-      <span class="privacy-more">How?</span>
-    </summary>
-    <ul>
-      <li><strong>Without sync</strong>, nothing you type is sent anywhere. It is stored only in this browser.</li>
-      <li><strong>With sync</strong>, your passphrase becomes two keys on your device. One lets the server find your encrypted copy. The other, the only key that can decrypt it, never leaves your device. The server stores scrambled bytes it has no way to read, and never sees your passphrase.</li>
-      <li><strong>Transfer links and QR codes</strong> carry their data after the # in the link, a part browsers never send to any server.</li>
-      <li><strong>Email</strong> opens your own mail app. Billable does not send anything itself.</li>
-      <li><strong>No outside scripts</strong> can run on this page. Your browser enforces that.</li>
-      <li><strong>No IP addresses are recorded</strong> by Billable's server. It holds them in memory for up to an hour, only to stop abuse of sync.</li>
-      <li><strong>What is still seen:</strong> Cloudflare, which carries the traffic, sees standard request details like any website: your IP address, browser type and when you visit. With sync on, the server sees when an encrypted copy is saved and how big it is.</li>
-    </ul>
-  </details>
-
   <div class="tip" id="safari-tip" hidden>
     <p id="safari-tip-text"></p>
     <button type="button" class="btn btn-small" id="safari-tip-close">Got it</button>
@@ -65,9 +48,9 @@
     <ul class="clients" id="clients"></ul>
   </section>
 
-  <section aria-labelledby="summary-h" class="panel">
+  <details class="panel fold" id="summary-wrap">
+    <summary class="section-h">Summary <span class="fold-status" id="summary-badge">0.0 h</span></summary>
     <div class="panel-head">
-      <h2 id="summary-h" class="section-h">Summary</h2>
       <div class="day-nav">
         <button type="button" class="btn btn-ghost" id="day-prev" aria-label="Previous day">&larr;</button>
         <input type="date" id="day-pick" aria-label="Summary date">
@@ -90,7 +73,7 @@
       </div>
       <p class="note">Email opens your own mail app with the summary filled in.</p>
     </div>
-  </section>
+  </details>
 
   <details class="panel fold" id="sync-wrap">
     <summary class="section-h">Sync devices <span class="fold-status" id="sync-badge">Off</span></summary>
@@ -205,6 +188,23 @@
       <input type="file" id="import-file" accept="application/json,.json" hidden>
       <button type="button" class="btn btn-danger" id="wipe-btn">Erase everything</button>
     </div>
+  </details>
+
+  <details class="privacy">
+    <summary>
+      <span class="privacy-head"><svg class="lock" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7.5" rx="1.5" fill="currentColor"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>Private by design.</span>
+      Your clients and hours stay on your device. With sync on, they are encrypted before they leave it, so this server cannot read them. No account, no ads, no analytics.
+      <span class="privacy-more">How?</span>
+    </summary>
+    <ul>
+      <li><strong>Without sync</strong>, nothing you type is sent anywhere. It is stored only in this browser.</li>
+      <li><strong>With sync</strong>, your passphrase becomes two keys on your device. One lets the server find your encrypted copy. The other, the only key that can decrypt it, never leaves your device. The server stores scrambled bytes it has no way to read, and never sees your passphrase.</li>
+      <li><strong>Transfer links and QR codes</strong> carry their data after the # in the link, a part browsers never send to any server.</li>
+      <li><strong>Email</strong> opens your own mail app. Billable does not send anything itself.</li>
+      <li><strong>No outside scripts</strong> can run on this page. Your browser enforces that.</li>
+      <li><strong>No IP addresses are recorded</strong> by Billable's server. It holds them in memory for up to an hour, only to stop abuse of sync.</li>
+      <li><strong>What is still seen:</strong> Cloudflare, which carries the traffic, sees standard request details like any website: your IP address, browser type and when you visit. With sync on, the server sees when an encrypted copy is saved and how big it is.</li>
+    </ul>
   </details>
 
   <p class="build">build __BUILD_TIME__</p>

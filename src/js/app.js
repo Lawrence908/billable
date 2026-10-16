@@ -16,6 +16,7 @@ const STATE_KEY = "billable.v1";
 const SYNC_KEY = "billable.sync";
 const TIP_KEY = "billable.tip-dismissed";
 const EXPANDED_KEY = "billable.expanded"; // which cards show their detail panel; this device only
+const SUMMARY_OPEN_KEY = "billable.summary-open"; // the summary starts minimized until opened
 const BUILD = document.querySelector('meta[name="build"]').content;
 const TRANSFER_MAX = 1400; // link characters; beyond this a QR code is hard to scan off a screen
 
@@ -564,8 +565,12 @@ function renderSummary(now) {
         el("td", { class: "num", text: fmtHours(l.hours) }))) : []),
     ]));
   }
+  const total = fmtHours(rows.reduce((a, r) => a + r.hours, 0));
   $("sum-exact").textContent = fmtHM(rows.reduce((a, r) => a + r.ms, 0));
-  $("sum-rounded").textContent = fmtHours(rows.reduce((a, r) => a + r.hours, 0));
+  $("sum-rounded").textContent = total;
+  // Visible while the panel is minimized; names the day when it is not today.
+  const day = viewDay === dayKey(now) ? "" : `${new Date(dayBounds(viewDay)[0]).toLocaleDateString(undefined, { month: "short", day: "numeric" })}: `;
+  $("summary-badge").textContent = `${day}${total} h`;
 }
 
 function renderLog(now) {
@@ -915,6 +920,9 @@ function useSyncFromStorage() {
     syncNow();
   }).catch(() => {});
 }
+
+$("summary-wrap").open = storage.get(SUMMARY_OPEN_KEY) === "1";
+$("summary-wrap").addEventListener("toggle", (e) => storage.set(SUMMARY_OPEN_KEY, e.target.open ? "1" : "0"));
 
 useSyncFromStorage();
 render();
