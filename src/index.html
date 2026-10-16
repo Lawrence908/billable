@@ -45,7 +45,8 @@
       <li><strong>Transfer links and QR codes</strong> carry their data after the # in the link, a part browsers never send to any server.</li>
       <li><strong>Email</strong> opens your own mail app. Billable does not send anything itself.</li>
       <li><strong>No outside scripts</strong> can run on this page. Your browser enforces that.</li>
-      <li><strong>What is seen:</strong> like any website, the server and its network provider (Cloudflare) see standard request details, such as your IP address, browser type and when you visit. With sync on, they also see when an encrypted copy is saved and how big it is.</li>
+      <li><strong>No IP addresses are recorded</strong> by Billable's server. It holds them in memory for up to an hour, only to stop abuse of sync.</li>
+      <li><strong>What is still seen:</strong> Cloudflare, which carries the traffic, sees standard request details like any website: your IP address, browser type and when you visit. With sync on, the server sees when an encrypted copy is saved and how big it is.</li>
     </ul>
   </details>
 
@@ -218,6 +219,6 @@
 </footer>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-<script src="/app.js?v=__BUILD_ID__" defer></script>
+<script type="module" src="/js/app.js?v=__BUILD_ID__"></script>
 </body>
 </html>

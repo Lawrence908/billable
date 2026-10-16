@@ -1,0 +1,12 @@
+{
+  "name": "billable",
+  "private": true,
+  "type": "module",
+  "description": "Per-client hours tracker with end-to-end encrypted sync. No build step and no dependencies.",
+  "scripts": {
+    "test": "TZ=America/Vancouver node --test tests/*.test.mjs && python3 -m unittest discover -s tests"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

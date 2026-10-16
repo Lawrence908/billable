@@ -2,6 +2,9 @@ networks:
   web:
     external: true
     name: homelab-web
+  # The API's own network: only the front container shares it.
+  backend:
+    internal: true
 
 services:
   billable:
@@ -18,8 +21,17 @@ services:
       - billable-api
     networks:
       - web
+      - backend
     ports:
       - "8175:80"
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health || exit 1"]
       interval: 30s
@@ -27,8 +39,8 @@ services:
       retries: 3
       start_period: 10s
 
-  # Encrypted sync mailboxes. No host port and no Caddy site: reachable only
-  # through the front container's /api/ prefix.
+  # Encrypted sync mailboxes. No host port and not on the shared network:
+  # reachable only through the front container's /api/ prefix.
   billable-api:
     build:
       context: ./api
@@ -36,11 +48,21 @@ services:
     image: billable-api:latest
     container_name: billable-api
     restart: unless-stopped
-    user: "1000:1000"
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
     networks:
-      - web
+      - backend
     volumes:
       - ./data:/app/data
+    environment:
+      # Set by Cloudflare at the edge. Leave empty if not behind Cloudflare.
+      - CLIENT_IP_HEADER=Cf-Connecting-Ip
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    pids_limit: 64
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/api/health || exit 1"]
       interval: 30s
