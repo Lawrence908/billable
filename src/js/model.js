@@ -37,8 +37,16 @@ export function newId(now = Date.now()) {
   return now.toString(36) + tail;
 }
 
+// Which columns "Copy for Sheets" fills, matching the work timesheet's order:
+// Date | Employee | Costing section | Notes | Hours.
+export const SHEET_LAYOUTS = ["notes-hours", "all"];
+
 export function blank() {
-  return { clients: [], sessions: [], settings: { email: "", allowOverlap: false, updated: 0 } };
+  return {
+    clients: [],
+    sessions: [],
+    settings: { email: "", allowOverlap: false, sheetLayout: "notes-hours", employee: "", updated: 0 },
+  };
 }
 
 const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
@@ -82,6 +90,8 @@ export function normalise(d) {
     out.settings = {
       email: String(d.settings.email || "").slice(0, 200),
       allowOverlap: !!d.settings.allowOverlap,
+      sheetLayout: SHEET_LAYOUTS.includes(d.settings.sheetLayout) ? d.settings.sheetLayout : "notes-hours",
+      employee: String(d.settings.employee || "").trim().slice(0, 80),
       updated: when(d.settings.updated),
     };
   }
@@ -257,6 +267,75 @@ export function csvFor(st, key, now) {
     }
   }
   return out.join("\r\n") + "\r\n";
+}
+
+// Rows for pasting into the work Google Sheet: tab-separated, so each value
+// lands in its own column. The sheet has no client column, so the client leads
+// the Notes cell. Lines that round to zero hours are left out.
+export function sheetRows(st, key, now) {
+  const { sheetLayout, employee } = st.settings;
+  const [y, m, d] = key.split("-");
+  const date = `${m}/${d}/${y}`;
+  const rows = [];
+  for (const r of summaryRows(st, key, now)) {
+    for (const l of r.lines) {
+      if (!l.hours) continue;
+      const notes = l.note ? `${r.client.name} · ${l.note}` : r.client.name;
+      const hours = fmtHours(l.hours);
+      rows.push(sheetLayout === "all" ? [date, employee, categoryLabel(l.category), notes, hours] : [notes, hours]);
+    }
+  }
+  return rows;
+}
+
+// Sheets treats a pasted cell starting with = + - @ as a formula; a leading
+// apostrophe keeps it as text and is not shown. Tabs and newlines would split cells.
+export function toTSV(rows) {
+  const cell = (v) => String(v).replace(/[\t\r\n]+/g, " ").replace(/^[=+\-@]/, "'$&");
+  return rows.map((r) => r.map(cell).join("\t")).join("\n");
+}
+
+/* ---------- forgotten timers ---------- */
+
+export const LONG_RUN = 4 * HOUR;
+
+// Running timers that are probably forgotten: started before today, or running
+// for LONG_RUN or more.
+export function timerNudges(st, now) {
+  const midnight = dayBounds(dayKey(now))[0];
+  return existingSessions(st)
+    .filter((s) => s.end === null)
+    .map((s) => ({ session: s, client: clientById(st, s.clientId), kind: s.start < midnight ? "overnight" : now - s.start >= LONG_RUN ? "long" : null }))
+    .filter((n) => n.kind);
+}
+
+/* ---------- timeline ---------- */
+
+const MIN_GAP = 5 * MINUTE;
+
+// Geometry for a day's timeline: whole-hour bounds around the day's entries
+// (at least three hours), each entry clipped to the day, and the untracked gaps
+// between entries. Null when nothing was tracked.
+export function timelineFor(st, key, now) {
+  const [dayStart, dayEnd] = dayBounds(key);
+  const blocks = existingSessions(st)
+    .map((s) => ({ session: s, start: Math.max(s.start, dayStart), end: Math.min(s.end === null ? now : s.end, dayEnd) }))
+    .filter((b) => b.end > b.start)
+    .sort((a, b) => a.start - b.start);
+  if (!blocks.length) return null;
+  const floorHour = (t) => { const d = new Date(t); d.setMinutes(0, 0, 0); return d.getTime(); };
+  const ceilHour = (t) => { const f = floorHour(t); return f === t ? t : f + HOUR; };
+  let from = floorHour(blocks[0].start);
+  let to = ceilHour(Math.max(...blocks.map((b) => b.end)));
+  if (to - from < 3 * HOUR) to = Math.min(dayEnd, from + 3 * HOUR);
+  if (to - from < 3 * HOUR) from = Math.max(dayStart, to - 3 * HOUR);
+  const gaps = [];
+  let covered = blocks[0].end;
+  for (const b of blocks.slice(1)) {
+    if (b.start - covered >= MIN_GAP) gaps.push({ start: covered, end: b.start });
+    covered = Math.max(covered, b.end);
+  }
+  return { from, to, blocks, gaps };
 }
 
 // Notes used before under a category, across all clients, most recent first.

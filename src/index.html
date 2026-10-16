@@ -33,6 +33,8 @@
 </header>
 
 <main class="wrap">
+  <div id="nudges" aria-live="polite"></div>
+
   <div class="tip" id="safari-tip" hidden>
     <p id="safari-tip-text"></p>
     <button type="button" class="btn btn-small" id="safari-tip-close">Got it</button>
@@ -47,6 +49,16 @@
     <p class="empty" id="clients-empty">Type a client name and press Add. Each client gets its own start and stop button, and stays here for tomorrow.</p>
     <ul class="clients" id="clients"></ul>
   </section>
+
+  <details class="panel fold" id="timeline-wrap">
+    <summary class="section-h">Timeline <span class="fold-status" id="timeline-day">Today</span></summary>
+    <p class="empty" id="timeline-empty">Nothing tracked on this day yet.</p>
+    <div id="timeline-body">
+      <div class="timeline" id="timeline"></div>
+      <ul class="timeline-legend" id="timeline-legend"></ul>
+      <p class="note">Tap a gap to fill in untracked time. Tap a block to fix its times.</p>
+    </div>
+  </details>
 
   <details class="panel fold" id="summary-wrap">
     <summary class="section-h">Summary <span class="fold-status" id="summary-badge">0.00 h</span></summary>
@@ -67,9 +79,13 @@
 
     <div class="send">
       <div class="send-row">
+        <button type="button" class="btn btn-primary" id="sheet-btn">Copy for Sheets</button>
+        <button type="button" class="btn" id="copy-btn">Copy as text</button>
+      </div>
+      <p class="note" id="sheet-note"></p>
+      <div class="send-row email-row">
         <input id="email-to" type="email" placeholder="Email to" autocomplete="email" aria-label="Email to">
-        <button type="button" class="btn btn-primary" id="email-btn">Email</button>
-        <button type="button" class="btn" id="copy-btn">Copy</button>
+        <button type="button" class="btn" id="email-btn">Email</button>
       </div>
       <p class="note">Email opens your own mail app with the summary filled in.</p>
     </div>
@@ -175,6 +191,13 @@
       <input type="checkbox" id="allow-overlap">
       Let more than one timer run at once (off: starting a client stops the others)
     </label>
+    <fieldset class="sheet-settings">
+      <legend class="label">Copy for Sheets</legend>
+      <label class="check"><input type="radio" name="sheet-layout" value="notes-hours"> Notes and Hours</label>
+      <label class="check"><input type="radio" name="sheet-layout" value="all"> All five columns: Date, Employee, Costing section, Notes, Hours</label>
+      <input id="employee" type="text" maxlength="80" autocomplete="name" placeholder="Your full name, exactly as in the sheet's Employee list" aria-label="Employee name for the sheet">
+      <p class="note">Costing section uses the category name (P3, Gaps and so on). Lines that round to 0.00 h are left out.</p>
+    </fieldset>
     <div id="archived-wrap">
       <p class="label">Removed clients</p>
       <ul class="archived" id="archived"></ul>

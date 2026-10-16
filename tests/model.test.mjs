@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import {
   atTime, csvFor, dayBounds, dayKey, endAfter, existingSessions, fmtHM, merge, normalise,
   noteSuggestions, pruneTombstones, retagClient, retagSession, roundQuarter, sameData, settleRunning, shiftDay,
-  summaryRows, summaryText, toggleTimer, totalsFor,
+  summaryRows, summaryText, toggleTimer, totalsFor, sheetRows, toTSV, timerNudges, timelineFor, LONG_RUN,
 } from "../src/js/model.js";
 
 const MIN = 60e3;
@@ -291,4 +291,80 @@ test("note suggestions are per category, shared across clients, most recent firs
   assert.deepEqual(noteSuggestions(st, "p3"), ["Punch list", "framing review", "Drywall"]);
   assert.deepEqual(noteSuggestions(st, "tech"), []);
   assert.deepEqual(noteSuggestions(st, ""), []);
+});
+
+/* ---------- copy for sheets ---------- */
+
+function sheetDay(settings) {
+  const k = "2026-10-16";
+  return [k, normalise({
+    clients: [{ id: "a", name: "Acme Corp", updated: 1 }, { id: "b", name: "Northwind", updated: 1 }],
+    sessions: [
+      { id: "1", clientId: "a", start: at(k, "08:00"), end: at(k, "09:50"), category: "p3", note: "Framing review", updated: 1 },
+      { id: "2", clientId: "a", start: at(k, "10:00"), end: at(k, "10:24"), category: "gaps", updated: 1 },
+      { id: "3", clientId: "a", start: at(k, "11:00"), end: at(k, "11:05"), updated: 1 }, // rounds to 0, left out
+      { id: "4", clientId: "b", start: at(k, "13:00"), end: at(k, "13:47"), updated: 1 },
+    ],
+    settings: { ...settings, updated: 1 },
+  })];
+}
+
+test("Copy for Sheets defaults to Notes and Hours, client leading the note, zero lines dropped", () => {
+  const [k, st] = sheetDay({});
+  assert.deepEqual(sheetRows(st, k, 0), [["Acme Corp · Framing review", "1.75"], ["Acme Corp", "0.50"], ["Northwind", "0.75"]]);
+});
+
+test("the all-columns layout follows the sheet: Date, Employee, Costing section, Notes, Hours", () => {
+  const [k, st] = sheetDay({ sheetLayout: "all", employee: "Chris Lawrence" });
+  assert.deepEqual(sheetRows(st, k, 0)[0], ["10/16/2026", "Chris Lawrence", "P3", "Acme Corp · Framing review", "1.75"]);
+  assert.deepEqual(sheetRows(st, k, 0)[2], ["10/16/2026", "Chris Lawrence", "", "Northwind", "0.75"]);
+});
+
+test("TSV keeps cells intact and stops Sheets reading text as a formula", () => {
+  assert.equal(toTSV([["a\tb", "=1+1"], ["line\nbreak", "-2"]]), "a b\t'=1+1\nline break\t'-2");
+});
+
+/* ---------- forgotten timers ---------- */
+
+test("a timer running since yesterday, or for four hours, is flagged", () => {
+  const k = "2026-10-16";
+  const st = normalise({
+    clients: [{ id: "a", name: "A", updated: 1 }, { id: "b", name: "B", updated: 1 }, { id: "c", name: "C", updated: 1 }],
+    sessions: [
+      { id: "1", clientId: "a", start: at("2026-10-15", "17:00"), end: null, updated: 1 },
+      { id: "2", clientId: "b", start: at(k, "08:00"), end: null, updated: 1 },
+      { id: "3", clientId: "c", start: at(k, "11:30"), end: null, updated: 1 },
+    ],
+    settings: { allowOverlap: true },
+  });
+  const now = at(k, "12:00");
+  assert.deepEqual(timerNudges(st, now).map((n) => [n.client.name, n.kind]), [["A", "overnight"], ["B", "long"]]);
+  assert.equal(LONG_RUN, 4 * HOUR);
+});
+
+/* ---------- timeline ---------- */
+
+test("the timeline spans whole hours around the entries and finds the gaps", () => {
+  const k = "2026-10-16";
+  const st = day([["a", "Acme"], ["b", "Beta"]], [
+    ["1", "a", at(k, "08:10"), at(k, "10:00")],
+    ["2", "b", at(k, "10:02"), at(k, "12:00")], // 2-minute gap: too small to show
+    ["3", "a", at(k, "13:15"), at(k, "14:40")],
+  ]);
+  const t = timelineFor(st, k, 0);
+  assert.equal(t.from, at(k, "08:00"));
+  assert.equal(t.to, at(k, "15:00"));
+  assert.deepEqual(t.gaps, [{ start: at(k, "12:00"), end: at(k, "13:15") }]);
+  assert.equal(t.blocks.length, 3);
+});
+
+test("the timeline is at least three hours wide, includes a running timer, and clips to the day", () => {
+  const k = "2026-10-16";
+  const running = day([["a", "Acme"]], [["1", "a", at(k, "09:00"), null]]);
+  const t = timelineFor(running, k, at(k, "09:40"));
+  assert.deepEqual([t.from, t.to], [at(k, "09:00"), at(k, "12:00")]);
+  assert.equal(t.blocks[0].end, at(k, "09:40"));
+  const overnight = day([["a", "Acme"]], [["1", "a", at("2026-10-15", "22:00"), at(k, "01:30")]]);
+  assert.equal(timelineFor(overnight, k, 0).blocks[0].start, at(k, "00:00"));
+  assert.equal(timelineFor(day([["a", "Acme"]], []), k, 0), null);
 });

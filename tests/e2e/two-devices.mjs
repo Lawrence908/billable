@@ -192,6 +192,72 @@ try {
     csvRows[0] === "date,client,category,note,tracked_hours,hours" && csvRows.some((r) => r.includes('"Acme Corp","Tech"')), csvRows.slice(0, 3).join(" | "));
   await F.p.screenshot({ path: new URL("../../screenshots/categories-390.png", import.meta.url).pathname, fullPage: true });
 
+  // Forgotten timers, the timeline, Copy for Sheets and offline loading.
+  const G = await device("G");
+  await G.ctx.grantPermissions(["clipboard-read", "clipboard-write"], { origin: BASE });
+  const seed = (fn) => G.p.evaluate(fn).then(() => G.p.reload());
+  await seed(() => {
+    const at = (daysAgo, h, m) => { const d = new Date(); d.setDate(d.getDate() - daysAgo); d.setHours(h, m, 0, 0); return d.getTime(); };
+    localStorage.setItem("billable.v1", JSON.stringify({
+      clients: [{ id: "a", name: "Acme Corp", updated: 1 }, { id: "b", name: "Northwind", updated: 1 }],
+      sessions: [{ id: "y", clientId: "a", start: at(1, 17, 0), end: null, updated: 1 }],
+    }));
+  });
+  check("a timer left running overnight raises a prompt", /running since/.test(await G.p.textContent("#nudges")));
+  await G.p.fill("#nudges input[type=time]", "17:30");
+  await G.p.click('#nudges button:has-text("Stop at that time")');
+  await G.p.waitForTimeout(200);
+  const stoppedAt = await G.p.evaluate(() => new Date(JSON.parse(localStorage.getItem("billable.v1")).sessions[0].end).getHours() * 60
+    + new Date(JSON.parse(localStorage.getItem("billable.v1")).sessions[0].end).getMinutes());
+  check("the prompt stops it at the time given, and goes away", stoppedAt === 17 * 60 + 30 && !(await G.p.textContent("#nudges")));
+
+  await seed(() => {
+    const s = JSON.parse(localStorage.getItem("billable.v1"));
+    s.sessions.push({ id: "long", clientId: "b", start: Date.now() - 5 * 3600e3, end: null, updated: 2 });
+    localStorage.setItem("billable.v1", JSON.stringify(s));
+  });
+  check("a five-hour timer asks if you are still on it", /Still on it\?/.test(await G.p.textContent("#nudges")));
+  await G.p.click('#nudges button:has-text("Still working")');
+  await G.p.reload();
+  check("'Still working' quiets the prompt, across a reload", !(await G.p.textContent("#nudges")));
+
+  await seed(() => {
+    const at = (h, m) => { const d = new Date(); d.setHours(h, m, 0, 0); return d.getTime(); };
+    localStorage.setItem("billable.v1", JSON.stringify({
+      clients: [{ id: "a", name: "Acme Corp", updated: 1 }, { id: "b", name: "Northwind", updated: 1 }],
+      sessions: [
+        { id: "1", clientId: "a", start: at(8, 0), end: at(9, 50), category: "p3", note: "Framing review", updated: 1 },
+        { id: "2", clientId: "b", start: at(10, 0), end: at(10, 45), updated: 1 },
+        { id: "3", clientId: "a", start: at(12, 0), end: at(12, 24), category: "gaps", updated: 1 },
+      ],
+      settings: { sheetLayout: "all", employee: "Chris Lawrence", updated: 1 },
+    }));
+  });
+  const counts = await G.p.evaluate(() => [document.querySelectorAll("#timeline .block").length, document.querySelectorAll("#timeline .gap").length]);
+  check("the timeline draws each entry and each untracked gap", JSON.stringify(counts) === "[3,2]", JSON.stringify(counts));
+  await G.p.locator("#timeline .gap").last().click();
+  check("tapping a gap pre-fills a new entry for it",
+    (await G.p.inputValue("#entry-start")) === "10:45" && (await G.p.inputValue("#entry-end")) === "12:00" && (await G.p.$eval("#log-wrap", (d) => d.open)));
+  await G.p.locator("#timeline .block").first().click();
+  await G.p.waitForTimeout(100);
+  check("tapping a block highlights its entry", await G.p.$eval('#log [data-id="1"]', (li) => li.classList.contains("flash")));
+  await G.p.screenshot({ path: new URL("../../screenshots/timeline-390.png", import.meta.url).pathname });
+
+  await G.p.click("#summary-wrap > summary");
+  await G.p.click("#sheet-btn");
+  await G.p.waitForTimeout(200);
+  const tsv = await G.p.evaluate(() => navigator.clipboard.readText());
+  const today = await G.p.evaluate(() => { const d = new Date(); return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}/${d.getFullYear()}`; });
+  check("Copy for Sheets puts tab-separated rows in the sheet's column order",
+    tsv.split("\n")[0] === `${today}\tChris Lawrence\tP3\tAcme Corp · Framing review\t1.75` && tsv.split("\n").length === 3, JSON.stringify(tsv.split("\n")[0]));
+
+  await G.p.waitForFunction(() => navigator.serviceWorker?.controller, null, { timeout: 10000 }).catch(() => {});
+  if (!(await G.p.evaluate(() => !!navigator.serviceWorker.controller))) await G.p.reload();
+  await G.ctx.setOffline(true);
+  await G.p.reload();
+  check("the app opens with no connection, data intact", (await clients(G.p)).length === 2);
+  await G.ctx.setOffline(false);
+
   await A.p.click("#sync-delete");
   await A.p.waitForTimeout(500);
   check("the synced copy can be deleted", /Server copy deleted/.test(await toast(A.p)));

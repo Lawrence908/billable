@@ -29,6 +29,24 @@ next one started on that card, are labelled with them.
   categories reads exactly as before.
 - Under Fix times, entries can be retagged when a switch was forgotten.
 
+## Day-to-day helpers
+
+- **Copy for Sheets** puts the day on the clipboard as tab-separated rows, so pasting
+  into a Google Sheet fills one row per summary line with each value in its own
+  column. A setting chooses between Notes and Hours, or all five work-timesheet columns
+  (Date, Employee, Costing section, Notes, Hours). The sheet has no client column, so
+  the client leads the Notes cell. Lines that round to 0.00 h are left out, and cells
+  that start like a formula are kept as text.
+- **Forgotten timers**: a timer still running from a previous day, or for four hours or
+  more, raises a prompt to stop it at the time you actually finished, stop now, or keep
+  going (which quiets it for two hours).
+- **Timeline**: the day drawn as a bar of client-coloured blocks with untracked gaps
+  hatched. Tapping a gap pre-fills a new entry for exactly that time; tapping a block
+  jumps to that entry under Fix times.
+- **Offline**: a service worker (`src/sw.js`) keeps the app itself on the device, so it
+  opens with no signal. It never handles data or `/api/` requests, and each deploy
+  installs a fresh copy.
+
 ## Privacy model
 
 Billable is built so the server never holds anything readable about you.

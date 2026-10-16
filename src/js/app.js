@@ -5,8 +5,8 @@
 import {
   CATEGORIES, activeClients, atTime, clientById, clientByName, clock, csvFor, dayBounds, dayKey, endAfter,
   existingClients, existingSessions, fmtHM, fmtHMS, fmtHours, merge, newId, normalise, noteSuggestions,
-  prettyDay, retagClient, retagSession, runningFor, shiftDay, stopAt, summaryRows, summaryText, tagLabel,
-  toggleTimer, totalsFor,
+  prettyDay, retagClient, retagSession, runningFor, sheetRows, shiftDay, stopAt, summaryRows, summaryText, tagLabel,
+  timelineFor, timerNudges, toTSV, toggleTimer, totalsFor,
 } from "./model.js";
 import { KDF_VERSION, deriveKeys, generatePhrase, normalisePhrase, phraseProblem } from "./crypto.js";
 import { createSyncer, mailboxClient } from "./sync.js";
@@ -17,6 +17,8 @@ const SYNC_KEY = "billable.sync";
 const TIP_KEY = "billable.tip-dismissed";
 const EXPANDED_KEY = "billable.expanded"; // which cards show their detail panel; this device only
 const SUMMARY_OPEN_KEY = "billable.summary-open"; // the summary starts minimized until opened
+const TIMELINE_OPEN_KEY = "billable.timeline-open"; // the timeline starts open
+const SNOOZE_KEY = "billable.nudge-snooze"; // session id -> time until which its nudge stays quiet
 const BUILD = document.querySelector('meta[name="build"]').content;
 const TRANSFER_MAX = 1400; // link characters; beyond this a QR code is hard to scan off a screen
 
@@ -223,6 +225,33 @@ function setSetting(field, value) {
   state.settings.updated = Date.now();
   saveState();
   scheduleSync();
+}
+
+/* ---------- forgotten timers ---------- */
+
+const snoozed = (() => {
+  try {
+    return JSON.parse(storage.get(SNOOZE_KEY) || "{}");
+  } catch {
+    return {};
+  }
+})();
+
+function snooze(sessionId, ms) {
+  snoozed[sessionId] = Date.now() + ms;
+  // Forget snoozes for timers that have since stopped.
+  for (const id of Object.keys(snoozed)) if (!existingSessions(state).some((s) => s.id === id && s.end === null)) delete snoozed[id];
+  storage.set(SNOOZE_KEY, JSON.stringify(snoozed));
+  render();
+}
+
+function stopForgotten(sessionId, end) {
+  const s = existingSessions(state).find((x) => x.id === sessionId);
+  if (!s) return;
+  if (end > Date.now()) return toast("That time hasn't happened yet.");
+  stopAt(s, end);
+  commit();
+  toast(`Stopped at ${clock(s.end)}.`);
 }
 
 /* ---------- sync wiring ---------- */
@@ -482,6 +511,97 @@ function tagControls({ category, note, onCategory, onNote, label }) {
   return el("div", { class: "tag-controls" }, select, input);
 }
 
+function renderNudges(now) {
+  const nudges = timerNudges(state, now).filter((n) => !(snoozed[n.session.id] > now));
+  $("nudges").replaceChildren(...nudges.map(({ session, client, kind }) => {
+    const since = new Date(session.start).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+    const time = el("input", { type: "time", "aria-label": `When you stopped working on ${client.name}` });
+    return el("div", { class: "nudge", role: "alert" },
+      el("p", {},
+        el("strong", { text: client.name }),
+        kind === "overnight"
+          ? ` has been running since ${since}. Did you forget to stop it? When did you finish?`
+          : ` has been running for ${fmtHM(now - session.start)}, since ${clock(session.start)}. Still on it?`),
+      el("div", { class: "send-row" },
+        time,
+        el("button", {
+          type: "button",
+          class: "btn btn-primary",
+          onclick: () => (time.value ? stopForgotten(session.id, endAfter(session.start, time.value)) : toast("Pick the time you stopped.")),
+          text: "Stop at that time",
+        }),
+        kind === "long" ? el("button", { type: "button", class: "btn", onclick: () => stopForgotten(session.id, Date.now()), text: "Stop now" }) : null,
+        el("button", { type: "button", class: "btn btn-ghost", onclick: () => snooze(session.id, 2 * 3600e3), text: "Still working" })));
+  }));
+}
+
+// Client colours for the timeline, stable for as long as the client exists.
+const PALETTE = ["#4fd39a", "#6aa7ff", "#f0b23e", "#b48cff", "#39c5cf", "#ff8fc7", "#e86a5f", "#c7d36a"];
+const colourOf = (clientId) => PALETTE[Math.max(0, existingClients(state).findIndex((c) => c.id === clientId)) % PALETTE.length];
+
+function renderTimeline(now) {
+  const today = viewDay === dayKey(now);
+  $("timeline-day").textContent = today ? "Today" : new Date(dayBounds(viewDay)[0]).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const t = timelineFor(state, viewDay, now);
+  $("timeline-empty").hidden = !!t;
+  $("timeline-body").hidden = !t;
+  if (!t) return;
+  const span = t.to - t.from;
+  const pct = (ms) => `${((ms - t.from) / span) * 100}%`;
+  const width = (a, b) => `${((b - a) / span) * 100}%`;
+  const place = (node, start, end) => {
+    node.style.left = pct(start);
+    node.style.width = width(start, end);
+    return node;
+  };
+  const hourStep = span > 10 * 3600e3 ? 2 : 1;
+  const ticks = [];
+  for (let h = t.from; h < t.to; h += hourStep * 3600e3) {
+    const tick = el("div", { class: "tick" }, el("span", { text: new Date(h).toLocaleTimeString(undefined, { hour: "numeric" }) }));
+    tick.style.left = pct(h);
+    ticks.push(tick);
+  }
+  const blocks = t.blocks.map((b) => {
+    const c = clientById(state, b.session.clientId);
+    const tag = tagLabel(b.session.category, b.session.note);
+    const running = b.session.end === null;
+    const label = `${c.name}${tag ? `, ${tag}` : ""}: ${clock(b.start)} to ${running ? "now" : clock(b.end)} (${fmtHM(b.end - b.start)})`;
+    const node = el("button", { type: "button", class: `block${running ? " running" : ""}`, title: label, "aria-label": label, onclick: () => showEntry(b.session.id) });
+    node.style.setProperty("--c", colourOf(c.id));
+    return place(node, b.start, b.end);
+  });
+  const gaps = t.gaps.map((g) => {
+    const label = `Untracked ${clock(g.start)} to ${clock(g.end)} (${fmtHM(g.end - g.start)}). Add an entry`;
+    return place(el("button", { type: "button", class: "gap", title: label, "aria-label": label, onclick: () => fillGap(g) }), g.start, g.end);
+  });
+  $("timeline").replaceChildren(...ticks, ...gaps, ...blocks);
+  const shown = [...new Set(t.blocks.map((b) => b.session.clientId))];
+  $("timeline-legend").replaceChildren(...shown.map((id) => {
+    const li = el("li", { text: clientById(state, id).name });
+    li.style.setProperty("--c", colourOf(id));
+    return li;
+  }));
+}
+
+function showEntry(sessionId) {
+  $("log-wrap").open = true;
+  const row = document.querySelector(`#log [data-id="${CSS.escape(sessionId)}"]`);
+  if (!row) return;
+  row.scrollIntoView({ behavior: "smooth", block: "center" });
+  row.classList.remove("flash");
+  void row.offsetWidth; // restart the animation
+  row.classList.add("flash");
+}
+
+function fillGap(gap) {
+  $("log-wrap").open = true;
+  $("entry-start").value = clock(gap.start);
+  $("entry-end").value = clock(gap.end);
+  $("add-entry").scrollIntoView({ behavior: "smooth", block: "center" });
+  $("entry-client").focus();
+  toast("Pick the client for that time, then press Add entry.");
+}
+
 function renderHeader(now) {
   const today = dayKey(now);
   const total = [...totalsFor(state, today, now).values()].reduce((a, b) => a + b, 0);
@@ -584,7 +704,7 @@ function renderLog(now) {
   const tagging = existingClients(state).some((c) => c.category) || existingSessions(state).some((s) => s.category);
   $("log").replaceChildren(...entries.map((s) => {
     const c = clientById(state, s.clientId);
-    return el("li", { class: "entry" },
+    return el("li", { class: "entry", "data-id": s.id },
       el("span", { class: "entry-client", title: c.name }, c.name + (c.archived ? " (removed)" : ""),
         s.start < from ? el("small", { text: " · from previous day" }) : null,
         s.end !== null && s.end > to ? el("small", { text: " · into next day" }) : null),
@@ -614,6 +734,12 @@ function renderLog(now) {
 
 function renderSettings() {
   $("allow-overlap").checked = state.settings.allowOverlap;
+  for (const r of document.querySelectorAll('input[name="sheet-layout"]')) r.checked = r.value === state.settings.sheetLayout;
+  if (document.activeElement !== $("employee")) $("employee").value = state.settings.employee;
+  $("employee").hidden = state.settings.sheetLayout !== "all";
+  $("sheet-note").textContent = state.settings.sheetLayout === "all"
+    ? "Pastes Date, Employee, Costing section, Notes and Hours. Click the first Date cell in your sheet, then paste."
+    : "Pastes Notes and Hours. Click the first Notes cell in your sheet, then paste.";
   if (document.activeElement !== $("email-to")) $("email-to").value = state.settings.email;
   const removed = existingClients(state).filter((c) => c.archived);
   $("archived-wrap").hidden = removed.length === 0;
@@ -676,7 +802,9 @@ function renderTip() {
 function render() {
   const now = Date.now();
   renderNoteLists();
+  renderNudges(now);
   renderHeader(now);
+  renderTimeline(now);
   renderClients(now);
   renderSummary(now);
   renderLog(now);
@@ -774,6 +902,19 @@ $("email-btn").addEventListener("click", () => {
   location.href = `mailto:${to}?subject=${subject}&body=${encodeURIComponent(summaryText(state, viewDay, Date.now()))}`;
 });
 $("copy-btn").addEventListener("click", () => copyText(summaryText(state, viewDay, Date.now()), "Summary"));
+$("sheet-btn").addEventListener("click", () => {
+  const rows = sheetRows(state, viewDay, Date.now());
+  if (!rows.length) return toast("Nothing to copy for this day.");
+  if (state.settings.sheetLayout === "all" && !state.settings.employee) toast("Tip: add your name under Settings to fill the Employee column.");
+  copyText(toTSV(rows), `${plural(rows.length, "row", "rows")}`);
+});
+for (const r of document.querySelectorAll('input[name="sheet-layout"]')) {
+  r.addEventListener("change", (e) => {
+    setSetting("sheetLayout", e.target.value);
+    renderSettings();
+  });
+}
+$("employee").addEventListener("change", (e) => setSetting("employee", e.target.value.trim()));
 $("csv-btn").addEventListener("click", () => download(`billable-${viewDay}.csv`, csvFor(state, viewDay, Date.now()), "text/csv"));
 
 $("add-entry").addEventListener("submit", (e) => {
@@ -923,6 +1064,12 @@ function useSyncFromStorage() {
 
 $("summary-wrap").open = storage.get(SUMMARY_OPEN_KEY) === "1";
 $("summary-wrap").addEventListener("toggle", (e) => storage.set(SUMMARY_OPEN_KEY, e.target.open ? "1" : "0"));
+$("timeline-wrap").open = storage.get(TIMELINE_OPEN_KEY) !== "0";
+$("timeline-wrap").addEventListener("toggle", (e) => storage.set(TIMELINE_OPEN_KEY, e.target.open ? "1" : "0"));
+
+// Offline: a service worker keeps the app itself on the device. The URL
+// carries the build, so each deploy installs a fresh copy and drops the old one.
+if ("serviceWorker" in navigator) navigator.serviceWorker.register(`/sw.js?v=${BUILD}`).catch(() => {});
 
 useSyncFromStorage();
 render();

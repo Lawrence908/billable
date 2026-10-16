@@ -9,5 +9,5 @@ ARG BUILD_ID=0
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY src/ /usr/share/nginx/html/
 
-RUN sed -i -e "s|__BUILD_TIME__|${BUILD_TIME}|g" -e "s|__BUILD_ID__|${BUILD_ID}|g" /usr/share/nginx/html/index.html \
+RUN sed -i -e "s|__BUILD_TIME__|${BUILD_TIME}|g" -e "s|__BUILD_ID__|${BUILD_ID}|g" /usr/share/nginx/html/index.html /usr/share/nginx/html/sw.js \
  && sed -i -E "s#(from \"\./[a-z]+\.js)\"#\1?v=${BUILD_ID}\"#g" /usr/share/nginx/html/js/*.js
