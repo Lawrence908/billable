@@ -2,7 +2,8 @@
 """Build billable's favicon set: a stopwatch on the house rounded square.
 
 Writes src/favicon.svg (standard library only), and, when cairosvg and Pillow
-are available, src/favicon.ico (48/32/16) and src/apple-touch-icon.png (180).
+are available, src/favicon.ico (48/32/16) src/apple-touch-icon.png (180) and the
+manifest's src/icon-192.png and src/icon-512.png.
 Adapted from econ-core/tools/build-favicons.py; colours are app.css --bg and
 --accent.
 
@@ -40,8 +41,8 @@ def main():
         print("favicon.svg only (cairosvg/Pillow missing)")
         return
     raw = SVG.encode()
-    cairosvg.svg2png(bytestring=raw, write_to=os.path.join(SRC, "apple-touch-icon.png"),
-                     output_width=180, output_height=180)
+    for name, size in (("apple-touch-icon.png", 180), ("icon-192.png", 192), ("icon-512.png", 512)):
+        cairosvg.svg2png(bytestring=raw, write_to=os.path.join(SRC, name), output_width=size, output_height=size)
     # Largest first: Pillow silently drops sizes bigger than the base image.
     frames = [Image.open(io.BytesIO(cairosvg.svg2png(bytestring=raw, output_width=s, output_height=s))).convert("RGBA")
               for s in (48, 32, 16)]
@@ -49,7 +50,7 @@ def main():
     frames[0].save(ico, format="ICO", sizes=[f.size for f in frames], append_images=frames[1:])
     got = sorted(Image.open(ico).info.get("sizes", set()))
     assert got == [(16, 16), (32, 32), (48, 48)], got
-    print("favicon.svg, favicon.ico", got, "apple-touch-icon.png")
+    print("favicon.svg, favicon.ico", got, "apple-touch-icon.png, icon-192.png, icon-512.png")
 
 
 if __name__ == "__main__":

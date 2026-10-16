@@ -14,12 +14,35 @@ services:
     image: billable:latest
     container_name: billable
     restart: unless-stopped
+    depends_on:
+      - billable-api
     networks:
       - web
     ports:
       - "8175:80"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Encrypted sync mailboxes. No host port and no Caddy site: reachable only
+  # through the front container's /api/ prefix.
+  billable-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    image: billable-api:latest
+    container_name: billable-api
+    restart: unless-stopped
+    user: "1000:1000"
+    networks:
+      - web
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/api/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

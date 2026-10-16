@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Turn the EFF large diceware list into src/words.js for passphrase generation.
+
+    python3 tools/build-words.py path/to/eff_large_wordlist.txt
+
+Source: https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
+sha256 addd35536511597a02fa0a9ff1e5284677b8883b83e986e43f15a3db996b903e
+
+Hyphenated entries (drop-down, t-shirt, ...) are dropped so a passphrase can
+travel in a link as words joined by hyphens and split back unambiguously.
+"""
+
+import hashlib
+import json
+import os
+import sys
+
+EXPECTED = "addd35536511597a02fa0a9ff1e5284677b8883b83e986e43f15a3db996b903e"
+OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src", "words.js")
+
+raw = open(sys.argv[1], "rb").read()
+if hashlib.sha256(raw).hexdigest() != EXPECTED:
+    sys.exit("wordlist hash mismatch; refusing to build")
+words = [line.split("\t")[1] for line in raw.decode().splitlines() if "\t" in line]
+words = [w for w in words if w.isalpha()]
+with open(OUT, "w") as fh:
+    fh.write("// EFF large wordlist (CC BY 3.0 US), hyphenated entries removed. Built by tools/build-words.py.\n")
+    fh.write(f"window.BILLABLE_WORDS = {json.dumps(' '.join(words))}.split(\" \");\n")
+print(f"{len(words)} words -> {OUT}")

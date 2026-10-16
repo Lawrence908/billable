@@ -6,6 +6,12 @@
 <title>Billable · hours per client</title>
 <meta name="description" content="Start and stop a timer per client, then get the day's hours rounded to the nearest half hour. Everything stays in your browser.">
 <meta name="theme-color" content="#16181c">
+<meta name="build" content="__BUILD_ID__">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Billable">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <link rel="icon" href="/favicon.ico" sizes="32x32">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -27,6 +33,11 @@
 </header>
 
 <main class="wrap">
+  <div class="tip" id="safari-tip" hidden>
+    <p id="safari-tip-text"></p>
+    <button type="button" class="btn btn-small" id="safari-tip-close">Got it</button>
+  </div>
+
   <section aria-labelledby="clients-h">
     <h2 id="clients-h" class="section-h">Clients</h2>
     <form id="add-client" class="add-client" autocomplete="off">
@@ -56,13 +67,93 @@
 
     <div class="send">
       <div class="send-row">
-        <input id="email-to" type="email" placeholder="Email to (remembered)" autocomplete="email" aria-label="Email to">
+        <input id="email-to" type="email" placeholder="Email to" autocomplete="email" aria-label="Email to">
         <button type="button" class="btn btn-primary" id="email-btn">Email</button>
         <button type="button" class="btn" id="copy-btn">Copy</button>
       </div>
       <p class="note">Email opens your own mail app with the summary filled in.</p>
     </div>
   </section>
+
+  <details class="panel fold" id="sync-wrap">
+    <summary class="section-h">Sync devices <span class="fold-status" id="sync-badge">Off</span></summary>
+    <p class="sync-working" id="sync-working" role="status" hidden></p>
+
+    <div id="sync-off">
+      <p class="note">Use one passphrase on your phone and computer to keep them in step. Your data is encrypted on this device before it is uploaded, so the server only holds bytes it cannot read. It never sees your client names or your passphrase.</p>
+      <button type="button" class="btn btn-primary" id="sync-create">Create a passphrase</button>
+
+      <div class="sync-new" id="sync-new" hidden>
+        <p class="label">Your passphrase</p>
+        <p class="phrase" id="sync-new-phrase"></p>
+        <p class="note">Write it down or keep it in a password manager. It is the only way into your synced data, and nobody can reset it.</p>
+        <div class="send-row">
+          <button type="button" class="btn" id="sync-new-copy">Copy</button>
+          <button type="button" class="btn" id="sync-new-again">Different words</button>
+        </div>
+        <label class="check"><input type="checkbox" id="sync-new-saved"> I have saved it somewhere safe</label>
+        <button type="button" class="btn btn-primary" id="sync-new-start" disabled>Start syncing</button>
+      </div>
+
+      <form id="sync-join" class="sync-form" autocomplete="off">
+        <label class="label" for="sync-join-phrase">Already have a passphrase?</label>
+        <div class="send-row">
+          <input id="sync-join-phrase" type="text" placeholder="The words from your other device" autocapitalize="none" spellcheck="false">
+          <button type="submit" class="btn">Connect</button>
+        </div>
+        <p class="note">Anything already on this device is merged in.</p>
+      </form>
+
+      <details class="mini">
+        <summary>Prefer to choose your own passphrase?</summary>
+        <form id="sync-own" class="sync-form" autocomplete="off">
+          <p class="note">At least 4 words and 20 characters, and not one you use anywhere else. Generated ones are stronger.</p>
+          <div class="send-row">
+            <input id="sync-own-phrase" type="text" placeholder="Your own passphrase" autocapitalize="none" spellcheck="false" aria-label="Your own passphrase">
+            <button type="submit" class="btn">Use this</button>
+          </div>
+        </form>
+      </details>
+    </div>
+
+    <div id="sync-on" hidden>
+      <p class="sync-status" id="sync-status"></p>
+      <p class="label">Passphrase</p>
+      <p class="phrase" id="sync-phrase"></p>
+      <div class="send-row">
+        <button type="button" class="btn" id="sync-show">Show</button>
+        <button type="button" class="btn" id="sync-now">Sync now</button>
+        <button type="button" class="btn" id="sync-qr-btn">Link a device</button>
+      </div>
+      <div class="qr-box" id="sync-qr" hidden>
+        <div class="qr" id="sync-qr-code"></div>
+        <p class="note">Scan this with your other device's camera to connect it. The passphrase travels in the part of the link after #, which browsers never send to a server. Don't show it to anyone you don't want reading your hours.</p>
+      </div>
+      <div class="send-row">
+        <button type="button" class="btn" id="sync-off-btn">Turn off on this device</button>
+        <button type="button" class="btn btn-danger" id="sync-delete">Delete synced copy</button>
+      </div>
+    </div>
+  </details>
+
+  <details class="panel fold" id="move-wrap">
+    <summary class="section-h">Move without sync</summary>
+    <p class="note">Copies your clients and recent days to another device in one go, with nothing stored on any server. The data rides inside the link itself.</p>
+    <button type="button" class="btn" id="move-make">Show transfer QR</button>
+    <div class="qr-box" id="move-box" hidden>
+      <div class="qr" id="move-qr"></div>
+      <p class="note" id="move-note"></p>
+      <button type="button" class="btn" id="move-copy">Copy link</button>
+    </div>
+    <form id="move-paste" class="sync-form" autocomplete="off">
+      <label class="label" for="move-link">Got a transfer link?</label>
+      <div class="send-row">
+        <input id="move-link" type="text" placeholder="Paste it here" spellcheck="false">
+        <button type="submit" class="btn">Add data</button>
+      </div>
+      <p class="note">Useful on an iPhone Home Screen app, which can't open links from the camera.</p>
+    </form>
+  </details>
 
   <details class="panel fold" id="log-wrap">
     <summary class="section-h">Fix times</summary>
@@ -88,7 +179,8 @@
       <p class="label">Removed clients</p>
       <ul class="archived" id="archived"></ul>
     </div>
-    <p class="note">Everything is stored only in this browser. There is no account and no server copy, so it will not follow you to another device, and clearing site data erases it.</p>
+    <p class="note">Without sync, everything is stored only in this browser. It will not follow you to another device, and clearing site data erases it.</p>
+    <p class="note" id="storage-note"></p>
     <div class="send-row">
       <button type="button" class="btn" id="csv-btn">Day as CSV</button>
       <button type="button" class="btn" id="export-btn">Export backup</button>
@@ -110,6 +202,6 @@
 </footer>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-<script src="/app.js?v=__BUILD_ID__"></script>
+<script src="/app.js?v=__BUILD_ID__" defer></script>
 </body>
 </html>
