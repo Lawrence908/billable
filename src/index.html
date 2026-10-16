@@ -33,6 +33,22 @@
 </header>
 
 <main class="wrap">
+  <details class="privacy">
+    <summary>
+      <span class="privacy-head"><svg class="lock" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7.5" rx="1.5" fill="currentColor"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>Private by design.</span>
+      Your clients and hours stay on your device. With sync on, they are encrypted before they leave it, so this server cannot read them. No account, no ads, no analytics.
+      <span class="privacy-more">How?</span>
+    </summary>
+    <ul>
+      <li><strong>Without sync</strong>, nothing you type is sent anywhere. It is stored only in this browser.</li>
+      <li><strong>With sync</strong>, your passphrase becomes two keys on your device. One lets the server find your encrypted copy. The other, the only key that can decrypt it, never leaves your device. The server stores scrambled bytes it has no way to read, and never sees your passphrase.</li>
+      <li><strong>Transfer links and QR codes</strong> carry their data after the # in the link, a part browsers never send to any server.</li>
+      <li><strong>Email</strong> opens your own mail app. Billable does not send anything itself.</li>
+      <li><strong>No outside scripts</strong> can run on this page. Your browser enforces that.</li>
+      <li><strong>What is seen:</strong> like any website, the server and its network provider (Cloudflare) see standard request details, such as your IP address, browser type and when you visit. With sync on, they also see when an encrypted copy is saved and how big it is.</li>
+    </ul>
+  </details>
+
   <div class="tip" id="safari-tip" hidden>
     <p id="safari-tip-text"></p>
     <button type="button" class="btn btn-small" id="safari-tip-close">Got it</button>
