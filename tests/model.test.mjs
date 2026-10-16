@@ -311,7 +311,7 @@ function sheetDay(settings) {
 
 test("Copy for Sheets copies one client: Notes and Hours by default, zero lines dropped", () => {
   const [k, st] = sheetDay({});
-  assert.deepEqual(sheetRows(st, k, 0, "a"), [["P3 · Framing review", "1.75"], ["Gaps", "0.50"]]);
+  assert.deepEqual(sheetRows(st, k, 0, "a"), [["Framing review", "1.75"], ["", "0.50"]]);
   assert.deepEqual(sheetRows(st, k, 0, "b"), [["", "0.75"]]);
   assert.deepEqual(sheetRows(st, k, 0, "nobody"), []);
 });

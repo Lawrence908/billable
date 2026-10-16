@@ -271,12 +271,9 @@ export function csvFor(st, key, now) {
 
 // Rows for one client, for pasting into that client's tab of the work Google
 // Sheet: tab-separated, so each value lands in its own column. Lines that
-// round to zero hours are left out.
-//
-// With all five columns, the category has its own Costing section column and
-// Notes is just the note. With Notes and Hours only, Notes carries the
-// category too ("P3 · Framing review"), so the right Costing section can be
-// picked by hand after pasting.
+// round to zero hours are left out. Notes is only the note: the category is
+// either its own Costing section column (all five columns) or picked by hand
+// in the sheet after pasting (Notes and Hours).
 export function sheetRows(st, key, now, clientId) {
   const { sheetLayout, employee } = st.settings;
   const [y, m, d] = key.split("-");
@@ -287,7 +284,7 @@ export function sheetRows(st, key, now, clientId) {
     .filter((l) => l.hours)
     .map((l) => sheetLayout === "all"
       ? [date, employee, categoryLabel(l.category), l.note, fmtHours(l.hours)]
-      : [tagLabel(l.category, l.note), fmtHours(l.hours)]);
+      : [l.note, fmtHours(l.hours)]);
 }
 
 // Sheets treats a pasted cell starting with = + - @ as a formula; a leading

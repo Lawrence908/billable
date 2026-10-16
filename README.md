@@ -34,8 +34,8 @@ next one started on that card, are labelled with them.
 - **Copy for Sheets**: each client in the summary has a copy button, because each
   client's hours go on its own tab of the work Google Sheet. It copies that client's
   lines as tab-separated rows, so one paste fills a row per line with each value in its
-  own column. A setting chooses Notes and Hours (Notes then carries the category, such
-  as "P3 · Framing review"), or all five timesheet columns (Date, Employee, Costing
+  own column. Notes gets only the note, never the category. A setting chooses Notes
+  and Hours, or all five timesheet columns (Date, Employee, Costing
   section, Notes, Hours). A tick marks clients already copied, and clears if their time
   changes afterwards. Zero-hour lines are left out, and formula-like cells stay text.
 - **Forgotten timers**: a timer still running from a previous day, or for four hours or
