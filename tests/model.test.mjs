@@ -1,5 +1,10 @@
-// Run with: TZ=America/Vancouver node --test tests/
+// Run with: npm test (which sets TZ=America/Los_Angeles).
 // The time zone is pinned so the DST cases below mean the same thing everywhere.
+// Los Angeles rather than Vancouver: time zone data 2026c records British
+// Columbia staying on UTC-7 from November 2026, so Vancouver no longer has the
+// fall-back day these tests need, while Los Angeles keeps both 2026 changes
+// (8 March and 1 November). The app itself has no zone rules of its own; it
+// uses whatever the device's time zone data says.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
