@@ -426,6 +426,29 @@ function el(tag, props = {}, ...kids) {
   return n;
 }
 
+// A time box whose edits are saved when you leave it, press Enter, or pause for
+// two seconds. Saving redraws the list, so saving on every change would replace
+// the box between the 3 and the 0 of a typed "30". A save made during a pause
+// puts the focus back in the redrawn box.
+const TIME_GRACE_MS = 2000;
+function timeField(id, field, value, label, save) {
+  let timer = null;
+  const flush = (refocus) => {
+    clearTimeout(timer);
+    timer = null;
+    if (!input.value || input.value === value) return;
+    save(input.value);
+    if (refocus) document.querySelector(`#log [data-id="${id}"] input[data-field="${field}"]`)?.focus();
+  };
+  const input = el("input", {
+    type: "time", value, "aria-label": label, "data-field": field,
+    onchange: () => { clearTimeout(timer); timer = setTimeout(() => flush(document.activeElement === input), TIME_GRACE_MS); },
+    onblur: () => { if (timer) flush(false); },
+    onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); },
+  });
+  return input;
+}
+
 /* ---------- rendering ---------- */
 
 // Redraws replace the DOM, which would throw away a half-typed note. Changes
@@ -686,11 +709,11 @@ function renderLog(now) {
       el("span", { class: "entry-client", title: c.name }, c.name + (c.archived ? " (removed)" : ""),
         s.start < from ? el("small", { text: " · from previous day" }) : null,
         s.end !== null && s.end > to ? el("small", { text: " · into next day" }) : null),
-      el("input", { type: "time", value: clock(s.start), "aria-label": "Start time", onchange: (e) => editSession(s.id, "start", e.target.value) }),
+      timeField(s.id, "start", clock(s.start), "Start time", (v) => editSession(s.id, "start", v)),
       el("span", { class: "dash", text: "to" }),
       s.end === null
         ? el("span", { class: "live", text: "running" })
-        : el("input", { type: "time", value: clock(s.end), "aria-label": "End time", onchange: (e) => editSession(s.id, "end", e.target.value) }),
+        : timeField(s.id, "end", clock(s.end), "End time", (v) => editSession(s.id, "end", v)),
       el("span", { class: "dur digits", "data-entry": s.id, text: fmtHM((s.end === null ? now : s.end) - s.start) }),
       el("button", { type: "button", class: "btn btn-small btn-danger", "aria-label": "Delete entry", onclick: () => deleteSession(s.id), text: "✕" }),
       tagging ? tagControls({

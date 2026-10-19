@@ -28,6 +28,8 @@ next one started on that card, are labelled with them.
   three 8-minute stretches count as 24 minutes, so 0.5 h, rather than 0.75 h. A client tracked without
   categories reads exactly as before.
 - Under Fix times, entries can be retagged when a switch was forgotten.
+- A time typed under Fix times is saved when you leave the box, press Enter, or pause
+  for two seconds, so a two-digit minute like 30 is never cut off after its first digit.
 
 ## Day-to-day helpers
 
