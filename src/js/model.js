@@ -45,9 +45,13 @@ export function blank() {
   return {
     clients: [],
     sessions: [],
-    settings: { email: "", allowOverlap: false, sheetLayout: "notes-hours", employee: "", updated: 0 },
+    settings: { email: "", allowOverlap: false, sheetLayout: "notes-hours", employee: "", lunchStop: true, lunchRestart: true, updated: 0 },
   };
 }
+
+// A session the lunch break stopped at noon, until 13:00 has been dealt with,
+// or one it started again at 13:00, until the user answers the banner.
+const LUNCH_MARKS = ["stopped", "restarted"];
 
 const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const when = (v) => (Number.isFinite(v) ? v : 0);
@@ -82,7 +86,8 @@ export function normalise(d) {
     // An end before the start happens when a timer is stopped on a device
     // whose clock is behind the one that started it. Keep the entry, at zero.
     const end = s.end === null ? null : Math.max(s.end, s.start);
-    out.sessions.push({ id: s.id, clientId, start: s.start, end, ...cleanTag(s.category, s.note), updated: when(s.updated) });
+    const lunch = LUNCH_MARKS.includes(s.lunch) ? { lunch: s.lunch } : {};
+    out.sessions.push({ id: s.id, clientId, start: s.start, end, ...cleanTag(s.category, s.note), ...lunch, updated: when(s.updated) });
   }
   out.clients.sort(byId);
   out.sessions.sort(byId);
@@ -92,6 +97,9 @@ export function normalise(d) {
       allowOverlap: !!d.settings.allowOverlap,
       sheetLayout: SHEET_LAYOUTS.includes(d.settings.sheetLayout) ? d.settings.sheetLayout : "notes-hours",
       employee: String(d.settings.employee || "").trim().slice(0, 80),
+      // On unless turned off, including for data saved before these existed.
+      lunchStop: d.settings.lunchStop !== false,
+      lunchRestart: d.settings.lunchRestart !== false,
       updated: when(d.settings.updated),
     };
   }
@@ -307,6 +315,74 @@ export function timerNudges(st, now) {
     .map((s) => ({ session: s, client: clientById(st, s.clientId), kind: s.start < midnight ? "overnight" : now - s.start >= LONG_RUN ? "long" : null }))
     .filter((n) => n.kind);
 }
+
+/* ---------- lunch ---------- */
+
+// On weekdays, timers running at noon stop for lunch, and the ones it stopped
+// start again at 13:00, unless a timer was started by hand in between. Run on
+// every tick, it also catches up when the app was closed over lunch.
+export const LUNCH_START = "12:00";
+export const LUNCH_END = "13:00";
+
+const isWeekday = (key) => {
+  const d = new Date(dayBounds(key)[0]).getDay();
+  return d > 0 && d < 6;
+};
+
+// The first weekday noon after `t`.
+function nextNoon(t) {
+  let key = dayKey(t);
+  for (let i = 0; i < 7; i++, key = shiftDay(key, 1)) {
+    const noon = atTime(key, LUNCH_START);
+    if (noon > t && isWeekday(key)) return noon;
+  }
+  return Infinity;
+}
+
+// Returns { state, stopped, restarted }: the new state (the same object when
+// nothing was due) and the sessions stopped and started by this call.
+export function lunchBreak(st, now) {
+  const stopped = [];
+  const restarted = [];
+  const { lunchStop, lunchRestart, allowOverlap } = st.settings;
+  const stopDue = (s) => lunchStop && s.end === null && nextNoon(s.start) <= now;
+  const restartDue = (s) => s.lunch === "stopped" && now >= atTime(dayKey(s.end), LUNCH_END);
+  if (!existingSessions(st).some((s) => stopDue(s) || restartDue(s))) return { state: st, stopped, restarted };
+
+  const out = normalise(st);
+  // A timer left running for days stops and starts again once per weekday, a pass each.
+  for (let pass = 0; pass < 100; pass++) {
+    const live = existingSessions(out);
+    const toStop = live.filter(stopDue);
+    const toRestart = live.filter(restartDue);
+    if (!toStop.length && !toRestart.length) break;
+    for (const s of toStop) {
+      Object.assign(s, { end: nextNoon(s.start), lunch: "stopped", updated: now });
+      stopped.push(s);
+    }
+    for (const s of toRestart) {
+      const key = dayKey(s.end);
+      const noon = atTime(key, LUNCH_START);
+      const start = atTime(key, LUNCH_END);
+      delete s.lunch;
+      s.updated = now;
+      // An end changed since noon means the user has already sorted this one out.
+      if (!lunchRestart || s.end !== noon || clientById(out, s.clientId).archived) continue;
+      const running = existingSessions(out).filter((x) => x.end === null);
+      const byHand = live.some((x) => x.start >= noon && x.start < now);
+      if (byHand || running.some((x) => x.clientId === s.clientId) || (!allowOverlap && running.length)) continue;
+      // The id is derived, not random, so two devices making this restart make the same entry.
+      const r = { id: start.toString(36) + s.id.slice(-10), clientId: s.clientId, start, end: null, category: s.category, note: s.note, lunch: "restarted", updated: now };
+      out.sessions.push(r);
+      restarted.push(r);
+    }
+  }
+  return { state: normalise(out), stopped, restarted };
+}
+
+// Today's timers that lunch started again, still waiting on the banner.
+export const lunchRestarts = (st, now) =>
+  existingSessions(st).filter((s) => s.lunch === "restarted" && dayKey(s.start) === dayKey(now));
 
 /* ---------- timeline ---------- */
 

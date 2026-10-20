@@ -451,6 +451,7 @@ input:focus-visible, select:focus-visible, .btn:focus-visible {
 /* Settings */
 .check { display: flex; gap: 0.6rem; align-items: flex-start; cursor: pointer; }
 .check input { margin-top: 0.3rem; accent-color: var(--accent); }
+.check:has(input:disabled) { opacity: 0.5; cursor: default; }
 /* Folded panels: closed by default, the summary line is the section heading. */
 .fold > summary { margin: 0; list-style: none; display: flex; align-items: center; gap: 0.5rem; }
 .fold > summary::-webkit-details-marker { display: none; }

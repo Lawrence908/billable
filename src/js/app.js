@@ -8,8 +8,8 @@
 // request after the page has loaded.
 
 import {
-  CATEGORIES, activeClients, atTime, clientById, clientByName, clock, csvFor, dayBounds, dayKey, endAfter,
-  existingClients, existingSessions, fmtHM, fmtHMS, fmtHours, merge, newId, normalise, noteSuggestions,
+  CATEGORIES, LUNCH_END, LUNCH_START, activeClients, atTime, clientById, clientByName, clock, csvFor, dayBounds, dayKey, endAfter,
+  existingClients, existingSessions, fmtHM, fmtHMS, fmtHours, lunchBreak, lunchRestarts, merge, newId, normalise, noteSuggestions,
   prettyDay, retagClient, retagSession, runningFor, sheetRows, shiftDay, stopAt, summaryRows, summaryText, tagLabel,
   timelineFor, timerNudges, toTSV, toggleTimer, totalsFor,
 } from "./model.js";
@@ -262,6 +262,57 @@ function stopForgotten(sessionId, end) {
   toast(`Stopped at ${clock(s.end)}.`);
 }
 
+/* ---------- lunch ---------- */
+
+// Restarted timers whose banner is asking when the user got back; this device only.
+const lunchAsking = new Set();
+
+// Stops and restarts timers for lunch when due. True when it changed anything.
+function applyLunch() {
+  const now = Date.now();
+  const { state: next, stopped } = lunchBreak(state, now);
+  if (next === state) return false;
+  state = next;
+  commit();
+  const waiting = stopped.filter((s) => s.lunch === "stopped").map((s) => clientById(state, s.clientId).name);
+  if (waiting.length) {
+    toast(`Stopped ${waiting.join(", ")} for lunch${state.settings.lunchRestart ? `, back on at ${clock(atTime(dayKey(now), LUNCH_END))}` : ""}.`);
+  }
+  return true;
+}
+
+// Answers a lunch restart's banner. `change` edits the session, or returns a
+// message to show without saving.
+function answerLunch(sessionId, change) {
+  const s = existingSessions(state).find((x) => x.id === sessionId);
+  if (!s) return;
+  const problem = change(s);
+  if (problem) return toast(problem);
+  lunchAsking.delete(sessionId);
+  delete s.lunch;
+  s.updated = Date.now();
+  commit();
+}
+
+const lunchAt = (s, hhmm) => atTime(dayKey(s.start), hhmm);
+
+function lunchBackAt(sessionId, hhmm) {
+  answerLunch(sessionId, (s) => {
+    const start = lunchAt(s, hhmm);
+    if (start < lunchAt(s, LUNCH_START)) return "Pick a time after lunch started.";
+    if (start > Date.now()) return "That time hasn't happened yet.";
+    if (s.end !== null && start > s.end) return "That's after this timer stopped.";
+    s.start = start;
+  });
+}
+
+function lunchNotBack(sessionId) {
+  lunchAsking.delete(sessionId);
+  tombstone(state.sessions, sessionId, Date.now());
+  commit();
+  toast("Removed. Press Start when you're back.");
+}
+
 /* ---------- copy for sheets ---------- */
 
 // Remembers what was copied for each client, so the summary can tick off the
@@ -497,9 +548,40 @@ function tagControls({ category, note, onCategory, onNote, label }) {
   return el("div", { class: "tag-controls" }, select, input);
 }
 
+function renderLunchNudge(session) {
+  const { name } = clientById(state, session.clientId);
+  const id = session.id;
+  if (lunchAsking.has(id)) {
+    const time = el("input", { type: "time", "aria-label": `When you got back to ${name}` });
+    return el("div", { class: "nudge", role: "alert" },
+      el("p", {}, "When did you get back to ", el("strong", { text: name }), "?"),
+      el("div", { class: "send-row" },
+        time,
+        el("button", {
+          type: "button",
+          class: "btn btn-primary",
+          onclick: () => (time.value ? lunchBackAt(id, time.value) : toast("Pick the time you got back.")),
+          text: "Back at that time",
+        }),
+        el("button", { type: "button", class: "btn", onclick: () => lunchNotBack(id), text: "Not back yet" }),
+        el("button", { type: "button", class: "btn btn-ghost", onclick: () => { lunchAsking.delete(id); render(); }, text: "Cancel" })));
+  }
+  return el("div", { class: "nudge", role: "alert" },
+    el("p", {}, el("strong", { text: name }), ` started again automatically at ${clock(session.start)}, after lunch.`),
+    el("div", { class: "send-row" },
+      el("button", { type: "button", class: "btn btn-primary", onclick: () => answerLunch(id, () => {}), text: "OK" }),
+      el("button", {
+        type: "button",
+        class: "btn",
+        onclick: () => answerLunch(id, (s) => { s.start = lunchAt(s, LUNCH_START); }),
+        text: "I worked through lunch",
+      }),
+      el("button", { type: "button", class: "btn btn-ghost", onclick: () => { lunchAsking.add(id); render(); }, text: "I wasn't working" })));
+}
+
 function renderNudges(now) {
   const nudges = timerNudges(state, now).filter((n) => !(snoozed[n.session.id] > now));
-  $("nudges").replaceChildren(...nudges.map(({ session, client, kind }) => {
+  $("nudges").replaceChildren(...lunchRestarts(state, now).map(renderLunchNudge), ...nudges.map(({ session, client, kind }) => {
     const since = new Date(session.start).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
     const time = el("input", { type: "time", "aria-label": `When you stopped working on ${client.name}` });
     return el("div", { class: "nudge", role: "alert" },
@@ -735,6 +817,9 @@ function renderLog(now) {
 
 function renderSettings() {
   $("allow-overlap").checked = state.settings.allowOverlap;
+  $("lunch-stop").checked = state.settings.lunchStop;
+  $("lunch-restart").checked = state.settings.lunchRestart;
+  $("lunch-restart").disabled = !state.settings.lunchStop;
   for (const r of document.querySelectorAll('input[name="sheet-layout"]')) r.checked = r.value === state.settings.sheetLayout;
   if (document.activeElement !== $("employee")) $("employee").value = state.settings.employee;
   $("employee").hidden = state.settings.sheetLayout !== "all";
@@ -795,6 +880,7 @@ function render() {
 let lastMinute = -1;
 let lastDay = dayKey(Date.now());
 function tick() {
+  if (applyLunch()) return;
   const now = Date.now();
   const today = dayKey(now);
   if (today !== lastDay) {
@@ -890,6 +976,11 @@ $("add-entry").addEventListener("submit", (e) => {
 });
 
 $("allow-overlap").addEventListener("change", (e) => setSetting("allowOverlap", e.target.checked));
+$("lunch-stop").addEventListener("change", (e) => {
+  setSetting("lunchStop", e.target.checked);
+  renderSettings();
+});
+$("lunch-restart").addEventListener("change", (e) => setSetting("lunchRestart", e.target.checked));
 
 $("export-btn").addEventListener("click", () =>
   download(`billable-backup-${dayKey(Date.now())}.json`, JSON.stringify(state, null, 2), "application/json"));
@@ -974,12 +1065,12 @@ const logo = document.querySelector(".footer-logo");
 if (logo && logo.complete && !logo.naturalWidth) logo.remove();
 else logo?.addEventListener("error", () => logo.remove());
 
-render();
+if (!applyLunch()) render();
 renderStorageNote();
 handleHash();
 window.addEventListener("hashchange", handleHash);
 setInterval(tick, 1000);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) render(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden && !applyLunch()) render(); });
 
 if (SYNC_ENABLED) {
   const app = {

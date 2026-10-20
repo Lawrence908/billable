@@ -8,9 +8,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  atTime, csvFor, dayBounds, dayKey, endAfter, existingSessions, fmtHM, merge, normalise,
+  atTime, clock, csvFor, dayBounds, dayKey, endAfter, existingSessions, fmtHM, merge, normalise,
   noteSuggestions, pruneTombstones, retagClient, retagSession, roundQuarter, sameData, settleRunning, shiftDay,
   summaryRows, summaryText, toggleTimer, totalsFor, sheetRows, toTSV, timerNudges, timelineFor, LONG_RUN,
+  lunchBreak, lunchRestarts,
 } from "../src/js/model.js";
 
 const MIN = 60e3;
@@ -350,6 +351,110 @@ test("a timer running since yesterday, or for four hours, is flagged", () => {
   const now = at(k, "12:00");
   assert.deepEqual(timerNudges(st, now).map((n) => [n.client.name, n.kind]), [["A", "overnight"], ["B", "long"]]);
   assert.equal(LONG_RUN, 4 * HOUR);
+});
+
+/* ---------- lunch ---------- */
+
+// 2026-10-16 is a Friday, 2026-10-17 a Saturday.
+const FRI = "2026-10-16";
+const lunchDay = (sessions, settings = {}) => normalise({
+  clients: [{ id: "a", name: "A", category: "pm", updated: 1 }, { id: "b", name: "B", updated: 1 }],
+  sessions: sessions.map(([id, clientId, start, end, extra = {}]) => ({ id, clientId, start, end, updated: 1, ...extra })),
+  settings: { allowOverlap: true, ...settings },
+});
+const spans = (st) => existingSessions(st).sort((x, y) => x.start - y.start || (x.clientId < y.clientId ? -1 : 1)).map((s) => [s.clientId, clock(s.start), s.end === null ? null : clock(s.end), s.lunch || ""]);
+
+test("lunch is on by default, also for data saved before it existed", () => {
+  const st = normalise({ settings: { email: "x" } });
+  assert.equal(st.settings.lunchStop, true);
+  assert.equal(st.settings.lunchRestart, true);
+  assert.equal(normalise({ settings: { lunchStop: false } }).settings.lunchStop, false);
+});
+
+test("a timer running at noon on a weekday stops at 12:00 and starts again at 13:00 with its tag", () => {
+  let st = lunchDay([["s1", "a", at(FRI, "09:00"), null, { category: "pm", note: "Docs" }]]);
+  assert.equal(lunchBreak(st, at(FRI, "11:59")).state, st, "nothing due: the same state comes back");
+
+  let r = lunchBreak(st, at(FRI, "12:00"));
+  st = r.state;
+  assert.deepEqual(spans(st), [["a", "09:00", "12:00", "stopped"]]);
+  assert.equal(r.stopped.length, 1);
+  assert.equal(lunchBreak(st, at(FRI, "12:59")).state, st);
+
+  r = lunchBreak(st, at(FRI, "13:00"));
+  st = r.state;
+  assert.deepEqual(spans(st), [["a", "09:00", "12:00", ""], ["a", "13:00", null, "restarted"]]);
+  const again = existingSessions(st).find((s) => s.end === null);
+  assert.deepEqual([again.category, again.note], ["pm", "Docs"]);
+  assert.equal(lunchBreak(st, at(FRI, "13:01")).state, st, "and nothing more is due");
+});
+
+test("opened after lunch, the app catches up in one go", () => {
+  const st = lunchBreak(lunchDay([["s1", "a", at(FRI, "09:00"), null]]), at(FRI, "14:30")).state;
+  assert.deepEqual(spans(st), [["a", "09:00", "12:00", ""], ["a", "13:00", null, "restarted"]]);
+});
+
+test("a timer started during lunch is left alone, and stops the restart", () => {
+  let st = lunchBreak(lunchDay([["s1", "a", at(FRI, "09:00"), null]]), at(FRI, "12:00")).state;
+  st.sessions.push({ id: "s2", clientId: "b", start: at(FRI, "12:30"), end: null, updated: 2 });
+  st = lunchBreak(normalise(st), at(FRI, "13:00")).state;
+  assert.deepEqual(spans(st), [["a", "09:00", "12:00", ""], ["b", "12:30", null, ""]]);
+});
+
+test("a started and stopped timer during lunch also counts as being back", () => {
+  let st = lunchBreak(lunchDay([["s1", "a", at(FRI, "09:00"), null]]), at(FRI, "12:00")).state;
+  st.sessions.push({ id: "s2", clientId: "b", start: at(FRI, "12:30"), end: at(FRI, "12:40"), updated: 2 });
+  st = lunchBreak(normalise(st), at(FRI, "13:00")).state;
+  assert.equal(existingSessions(st).filter((s) => s.end === null).length, 0);
+});
+
+test("an end changed during lunch means no restart", () => {
+  let st = lunchBreak(lunchDay([["s1", "a", at(FRI, "09:00"), null]]), at(FRI, "12:00")).state;
+  st.sessions[0].end = at(FRI, "11:30");
+  st = lunchBreak(st, at(FRI, "13:00")).state;
+  assert.deepEqual(spans(st), [["a", "09:00", "11:30", ""]]);
+});
+
+test("every running timer stops for lunch and each one starts again", () => {
+  const st = lunchBreak(lunchDay([["s1", "a", at(FRI, "09:00"), null], ["s2", "b", at(FRI, "10:00"), null]]), at(FRI, "13:00")).state;
+  assert.deepEqual(spans(st).filter((x) => x[2] === null), [["a", "13:00", null, "restarted"], ["b", "13:00", null, "restarted"]]);
+});
+
+test("weekends have no lunch break", () => {
+  const sat = "2026-10-17";
+  const st = lunchDay([["s1", "a", at(sat, "09:00"), null]]);
+  assert.equal(lunchBreak(st, at(sat, "15:00")).state, st);
+});
+
+test("the settings turn off the stop, or only the restart", () => {
+  const st = lunchDay([["s1", "a", at(FRI, "09:00"), null]], { lunchStop: false });
+  assert.equal(lunchBreak(st, at(FRI, "15:00")).state, st);
+  const noRestart = lunchBreak(lunchDay([["s1", "a", at(FRI, "09:00"), null]], { lunchRestart: false }), at(FRI, "15:00")).state;
+  assert.deepEqual(spans(noRestart), [["a", "09:00", "12:00", ""]]);
+});
+
+test("a timer forgotten over a weekend stops and restarts on each weekday, DST included", () => {
+  // Friday 30 October to Monday 2 November 2026; clocks fall back on Sunday 1 November.
+  const st = lunchBreak(lunchDay([["s1", "a", at("2026-10-30", "09:00"), null]]), at("2026-11-02", "14:00")).state;
+  const rows = existingSessions(st).sort((x, y) => x.start - y.start).map((s) => [dayKey(s.start), clock(s.start), s.end && dayKey(s.end), s.end && clock(s.end)]);
+  assert.deepEqual(rows, [
+    ["2026-10-30", "09:00", "2026-10-30", "12:00"],
+    ["2026-10-30", "13:00", "2026-11-02", "12:00"],
+    ["2026-11-02", "13:00", null, null],
+  ]);
+});
+
+test("two devices restarting the same timer make the same entry", () => {
+  const st = lunchDay([["s1", "a", at(FRI, "09:00"), null]]);
+  const one = lunchBreak(st, at(FRI, "13:00")).state;
+  const two = lunchBreak(st, at(FRI, "13:05")).state;
+  assert.equal(existingSessions(merge(one, two)).length, 2);
+});
+
+test("only today's lunch restarts wait on the banner", () => {
+  const st = lunchBreak(lunchDay([["s1", "a", at(FRI, "09:00"), null]]), at(FRI, "13:00")).state;
+  assert.equal(lunchRestarts(st, at(FRI, "13:00")).length, 1);
+  assert.equal(lunchRestarts(st, at("2026-10-17", "09:00")).length, 0);
 });
 
 /* ---------- timeline ---------- */
