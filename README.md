@@ -12,7 +12,7 @@ no build step, and no runtime dependencies.
 ## Categories and notes (optional)
 
 Each client card has a **More** button that opens a category dropdown (P0 to P8,
-Project Management, Gaps, Internal, Tech) and a note box. The running timer, and the
+Project Management, Gaps, Internal, Tech, Optimization/Change Order) and a note box. The running timer, and the
 next one started on that card, are labelled with them.
 
 - Changing the category or note mid-timer splits the time at that moment, so the time

@@ -12,13 +12,15 @@ export const MINUTE = 60e3;
 export const HOUR = 60 * MINUTE;
 
 // Optional detail on a timer: a fixed category, plus a free-text note that
-// only exists under a category.
+// only exists under a category. New categories go at the end: the transfer
+// code refers to them by position, so inserting one would shift the rest.
 export const CATEGORIES = [
   ...Array.from({ length: 9 }, (_, i) => ({ key: `p${i}`, label: `P${i}` })),
   { key: "pm", label: "Project Management" },
   { key: "gaps", label: "Gaps" },
   { key: "internal", label: "Internal" },
   { key: "tech", label: "Tech" },
+  { key: "change", label: "Optimization/Change Order" },
 ];
 const CATEGORY_KEYS = new Set(CATEGORIES.map((c) => c.key));
 

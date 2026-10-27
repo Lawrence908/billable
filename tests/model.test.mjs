@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  atTime, clock, csvFor, dayBounds, dayKey, endAfter, existingSessions, fmtHM, merge, normalise,
+  CATEGORIES, atTime, clock, csvFor, dayBounds, dayKey, endAfter, existingSessions, fmtHM, merge, normalise,
   noteSuggestions, pruneTombstones, retagClient, retagSession, roundQuarter, sameData, settleRunning, shiftDay,
   summaryRows, summaryText, toggleTimer, totalsFor, sheetRows, toTSV, timerNudges, timelineFor, LONG_RUN,
   lunchBreak, lunchRestarts,
@@ -210,6 +210,13 @@ test("dayKey uses the local calendar day", () => {
 /* ---------- categories and notes ---------- */
 
 const ids = () => { let n = 0; return () => `id${n++}`; };
+
+test("categories keep their positions, which the transfer code relies on", () => {
+  assert.deepEqual(CATEGORIES.map((c) => c.key),
+    ["p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "pm", "gaps", "internal", "tech", "change"]);
+  const st = normalise({ clients: [{ id: "a", name: "A", category: "change", note: "Report rework" }] });
+  assert.deepEqual([st.clients[0].category, st.clients[0].note], ["change", "Report rework"]);
+});
 
 test("a note without a category, or an unknown category, is dropped", () => {
   const st = normalise({
