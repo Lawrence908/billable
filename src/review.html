@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- Same policy as the app: nothing may connect anywhere. nginx.conf sends it as a header too. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src __CONNECT_SRC__; img-src 'self' data:; font-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; form-action 'none'; base-uri 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Billable · review hours</title>
+<meta name="theme-color" content="#16181c">
+<meta name="build" content="__BUILD_ID__">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css?v=__BUILD_ID__">
+</head>
+<body class="review">
+<header class="masthead">
+  <div class="wrap wide masthead-row">
+    <div>
+      <h1>Billable review</h1>
+      <p class="sub">Everyone's hours, from the files they send you. Stays in this browser.</p>
+    </div>
+    <div class="today-total">
+      <span class="label" id="period-label">Period</span>
+      <span class="digits" id="period-total">0.00</span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap wide">
+  <section class="panel">
+    <div class="panel-head">
+      <h2 class="section-h">Period</h2>
+      <span class="fold-status" id="people-badge">No files yet</span>
+    </div>
+    <div class="period-row">
+      <input id="period-from" type="date" aria-label="First day">
+      <span class="dash">to</span>
+      <input id="period-to" type="date" aria-label="Last day">
+      <button type="button" class="btn btn-small" data-preset="this-week">This week</button>
+      <button type="button" class="btn btn-small" data-preset="last-week">Last week</button>
+      <button type="button" class="btn btn-small" data-preset="this-month">This month</button>
+      <button type="button" class="btn btn-small" data-preset="last-month">Last month</button>
+    </div>
+  </section>
+
+  <section class="panel drop" id="files-panel">
+    <div class="panel-head">
+      <h2 class="section-h">Hours files</h2>
+      <label class="btn btn-primary btn-small" for="hours-files">Add hours files</label>
+      <input type="file" id="hours-files" accept="application/json,.json" multiple hidden>
+    </div>
+    <p class="note" id="files-empty">Ask each person to open Billable, go to Settings, then Send hours for review, and send you the file. Drop the files here or use Add hours files. A newer file for the same days replaces the older one.</p>
+    <table class="summary review-table" id="people-table" hidden>
+      <thead><tr><th>Person</th><th>Files cover</th><th>Missing weekdays</th><th class="num">Hours</th><th></th></tr></thead>
+      <tbody id="people"></tbody>
+    </table>
+  </section>
+
+  <section class="panel" id="checks-panel">
+    <div class="panel-head">
+      <h2 class="section-h">Checks</h2>
+      <span class="fold-status" id="checks-badge"></span>
+    </div>
+    <ul class="checks" id="checks"></ul>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2 class="section-h">Hours by client</h2>
+      <span class="fold-status" id="reviewed-badge"></span>
+    </div>
+    <p class="empty" id="clients-empty">No hours in this period.</p>
+    <table class="summary review-table" id="clients-table" hidden>
+      <thead><tr><th>Client</th><th>People</th><th class="num">Hours</th><th>Reviewed</th><th class="copy-col"><span class="visually-hidden">Copy</span></th></tr></thead>
+      <tbody id="clients"></tbody>
+      <tfoot><tr><th colspan="2">Total</th><th class="num" id="clients-total">0.00</th><th colspan="2"></th></tr></tfoot>
+    </table>
+    <p class="note">Hours are each person's lines for each day, rounded to the nearest 0.25 h as they would paste them, then added up. A copy button copies that client's rows in the timesheet's five columns: Date, Employee, Costing section, Notes, Hours.</p>
+  </section>
+
+  <details class="panel fold" id="glance-wrap">
+    <summary class="section-h">At a glance</summary>
+    <div class="glance">
+      <table class="summary review-table">
+        <thead><tr><th>Person</th><th class="num">Hours</th><th class="num">Share</th></tr></thead>
+        <tbody id="by-person"></tbody>
+      </table>
+      <table class="summary review-table">
+        <thead><tr><th>Category</th><th class="num">Hours</th><th class="num">Share</th></tr></thead>
+        <tbody id="by-category"></tbody>
+      </table>
+    </div>
+  </details>
+
+  <section class="panel">
+    <h2 class="section-h">Hand off</h2>
+    <div class="send-row">
+      <input id="ar-email" type="email" placeholder="Send to (for example, AR)" aria-label="Send to">
+      <button type="button" class="btn" id="email-btn">Email summary</button>
+      <button type="button" class="btn" id="copy-summary">Copy summary</button>
+    </div>
+    <div class="send-row">
+      <button type="button" class="btn" id="detail-csv">Every line as CSV</button>
+      <button type="button" class="btn" id="totals-csv">Totals as CSV</button>
+    </div>
+    <p class="note">Email opens your own mail app with the summary filled in. Attach a CSV there if they need the detail.</p>
+  </section>
+
+  <details class="panel fold" id="lists-wrap">
+    <summary class="section-h">Official lists <span class="fold-status" id="lists-badge">None yet</span></summary>
+    <p class="note">The names everyone should use. Staff get them by opening a link from you, once; after that, Billable suggests them as they type and asks before adding a client that isn't on the list. The names travel inside the link itself and are never stored on the website.</p>
+    <label class="field">
+      <span class="label">Your name, shown to staff</span>
+      <input id="lists-by" type="text" maxlength="80" autocomplete="name">
+    </label>
+    <label class="field">
+      <span class="label">Clients, one per line</span>
+      <textarea id="lists-clients" rows="8" placeholder="Paste the client tab names from the timesheet Sheet"></textarea>
+    </label>
+    <p class="label">Phase names</p>
+    <div class="phase-grid" id="lists-phases"></div>
+    <p class="label">Tasks, one per line</p>
+    <p class="note">Tasks under All categories appear everywhere, such as meetings. Staff can still type a task that isn't listed; it shows up under Checks.</p>
+    <div class="task-grid" id="lists-tasks"></div>
+    <div class="send-row">
+      <button type="button" class="btn btn-primary" id="lists-save">Save lists</button>
+      <button type="button" class="btn" id="lists-link">Copy link for staff</button>
+      <button type="button" class="btn" id="lists-qr-btn">Show QR</button>
+    </div>
+    <div class="qr" id="lists-qr" hidden></div>
+  </details>
+
+  <details class="panel fold">
+    <summary class="section-h">This review's data</summary>
+    <p class="note">Everything on this page is stored only in this browser. Export a copy now and then, and to move it to another computer.</p>
+    <div class="send-row">
+      <button type="button" class="btn" id="review-export">Export review data</button>
+      <label class="btn" for="review-import">Import review data</label>
+      <input type="file" id="review-import" accept="application/json,.json" hidden>
+      <button type="button" class="btn btn-danger" id="review-wipe">Erase everyone's hours</button>
+    </div>
+  </details>
+
+  <p class="build">build __BUILD_TIME__</p>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="/vendor/qrcode-2.0.4.js?v=__BUILD_ID__" defer></script>
+<script type="module" src="/js/review.js?v=__BUILD_ID__"></script>
+</body>
+</html>

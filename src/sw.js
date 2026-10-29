@@ -22,6 +22,8 @@ const SHELL = [
   "/js/model.js?v=__BUILD_ID__",
   "/js/bytes.js?v=__BUILD_ID__",
   "/js/transfer.js?v=__BUILD_ID__",
+  "/js/review-model.js?v=__BUILD_ID__",
+  "/js/ui.js?v=__BUILD_ID__",
   "/js/sync-ui.js?v=__BUILD_ID__", // sync-only
   "/js/sync.js?v=__BUILD_ID__", // sync-only
   "/js/crypto.js?v=__BUILD_ID__", // sync-only
@@ -63,17 +65,21 @@ self.addEventListener("fetch", (event) => {
 
 // The page: network first, so a deploy shows up straight away, falling back to
 // the saved copy when offline or slow.
+// Each page is saved under its own path, so opening the review page never
+// replaces the app's offline copy, and any other address falls back to the app.
 async function page(req) {
   const cache = await caches.open(VERSION);
+  const { pathname } = new URL(req.url);
+  const key = pathname === "/review.html" ? pathname : "/";
   try {
     const fresh = await Promise.race([
       fetch(req),
       new Promise((_, reject) => setTimeout(() => reject(new Error("slow")), NETWORK_TIMEOUT)),
     ]);
-    if (fresh.ok) cache.put("/", fresh.clone());
+    if (fresh.ok) cache.put(key, fresh.clone());
     return fresh;
   } catch {
-    return (await cache.match("/")) || Response.error();
+    return (await cache.match(key)) || Response.error();
   }
 }
 

@@ -15,6 +15,8 @@ import {
 } from "./model.js";
 import { SYNC_ENABLED } from "./config.js";
 import { applyTransfer, buildTransfer, decodeTransfer, encodeTransfer } from "./transfer.js";
+import { copyText, download, el, guarded, renderQR, storage, toast } from "./ui.js";
+import { decodeLists, hasLists, hoursFile, hoursFileName, normaliseLists, officialClient, phaseLabel, tasksFor, weekStart } from "./review-model.js";
 
 const STATE_KEY = "billable.v1";
 const SYNC_KEY = "billable.sync"; // only read to delete it when sync is off
@@ -24,6 +26,7 @@ const SUMMARY_OPEN_KEY = "billable.summary-open"; // the summary starts minimize
 const TIMELINE_OPEN_KEY = "billable.timeline-open"; // the timeline starts open
 const SNOOZE_KEY = "billable.nudge-snooze"; // session id -> time until which its nudge stays quiet
 const COPIED_KEY = "billable.sheet-copied"; // day -> { client id: what was copied }, for the ticks
+const LISTS_KEY = "billable.lists"; // official names from the reviewer's link; this device only
 const BUILD = document.querySelector('meta[name="build"]').content;
 const TRANSFER_MAX = 1400; // link characters; beyond this a QR code is hard to scan off a screen
 
@@ -34,30 +37,6 @@ const hooks = { changed() {}, active: () => false, render() {} };
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 /* ---------- storage ---------- */
-
-// localStorage can throw: quota exceeded, storage disabled, some private modes.
-const storage = {
-  get(key) {
-    try {
-      return localStorage.getItem(key);
-    } catch {
-      return null;
-    }
-  },
-  set(key, value) {
-    try {
-      localStorage.setItem(key, value);
-      return true;
-    } catch {
-      return false;
-    }
-  },
-  remove(key) {
-    try {
-      localStorage.removeItem(key);
-    } catch { /* nothing to do */ }
-  },
-};
 
 function loadState() {
   const raw = storage.get(STATE_KEY);
@@ -72,8 +51,19 @@ function loadState() {
 }
 
 let state = loadState();
+let lists = loadLists();
 let viewDay = dayKey(Date.now());
 let saveWarned = false;
+
+// Official client, phase and task names, opened from the reviewer's link.
+// Kept apart from the hours: they belong to the reviewer, not to this person.
+function loadLists() {
+  try {
+    return normaliseLists(JSON.parse(storage.get(LISTS_KEY) || "null"));
+  } catch {
+    return normaliseLists(null);
+  }
+}
 
 function saveState() {
   if (storage.set(STATE_KEY, JSON.stringify(state))) {
@@ -103,6 +93,11 @@ function requestPersist() {
 function addClient(name) {
   name = name.trim().slice(0, 80);
   if (!name) return;
+  if (lists.clients.length) {
+    const official = officialClient(lists, name);
+    if (official) name = official;
+    else if (!confirm(`"${name}" isn't on the official client list. Add it anyway?`)) return;
+  }
   const same = clientByName(state, name);
   if (same && !same.archived) return toast(`${same.name} is already in the list.`);
   if (same) {
@@ -363,39 +358,6 @@ function icon(d) {
 
 /* ---------- QR codes ---------- */
 
-const SVG_NS = "http://www.w3.org/2000/svg";
-
-// Built from the module grid as one SVG path, rather than the library's own
-// SVG/GIF helpers, so nothing is injected as HTML and the strict CSP holds.
-// The library (qrcode-generator, vendored) loads with the page, so drawing a
-// code later fetches nothing.
-function renderQR(container, text, label) {
-  if (typeof window.qrcode !== "function") throw new Error("The QR code part of the page didn't load. Reload and try again.");
-  const qr = window.qrcode(0, "L");
-  qr.addData(text, "Byte");
-  qr.make();
-  const n = qr.getModuleCount();
-  const pad = 4;
-  let d = "";
-  for (let r = 0; r < n; r++) {
-    for (let c = 0; c < n; c++) if (qr.isDark(r, c)) d += `M${c + pad} ${r + pad}h1v1h-1z`;
-  }
-  const svg = document.createElementNS(SVG_NS, "svg");
-  svg.setAttribute("viewBox", `0 0 ${n + pad * 2} ${n + pad * 2}`);
-  svg.setAttribute("shape-rendering", "crispEdges");
-  svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", label);
-  const bg = document.createElementNS(SVG_NS, "rect");
-  bg.setAttribute("width", "100%");
-  bg.setAttribute("height", "100%");
-  bg.setAttribute("fill", "#fff");
-  const path = document.createElementNS(SVG_NS, "path");
-  path.setAttribute("d", d);
-  path.setAttribute("fill", "#000");
-  svg.append(bg, path);
-  container.replaceChildren(svg);
-}
-
 /* ---------- transfer ---------- */
 
 async function makeTransferLink() {
@@ -412,69 +374,6 @@ function importTransfer(transfer) {
   state = result.state;
   commit();
   toast(`Added ${plural(result.addedClients, "new client", "new clients")} and ${plural(result.addedSessions, "entry", "entries")}.`);
-}
-
-/* ---------- small helpers ---------- */
-
-function download(name, text, type) {
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([text], { type }));
-  a.download = name;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-}
-
-// Returns whether the copy worked. Toasts itself only when given a label.
-async function copyText(text, what) {
-  try {
-    await navigator.clipboard.writeText(text);
-    if (what) toast(`${what} copied.`);
-    return true;
-  } catch {
-    // The Clipboard API needs permission; fall back to a selection copy.
-    const ta = el("textarea", { class: "offscreen" });
-    ta.value = text;
-    document.body.append(ta);
-    ta.select();
-    const ok = document.execCommand("copy");
-    ta.remove();
-    if (!ok) toast("Copy failed; your browser blocked it.");
-    else if (what) toast(`${what} copied.`);
-    return ok;
-  }
-}
-
-let toastTimer;
-function toast(msg) {
-  const t = $("toast");
-  t.textContent = msg;
-  t.classList.add("show");
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove("show"), 4000);
-}
-
-// Wraps an async event handler so a failure is shown rather than swallowed.
-const guarded = (fn) => async (...args) => {
-  try {
-    await fn(...args);
-  } catch (e) {
-    toast(e.message || String(e));
-  }
-};
-
-// Small element builder; text always goes through textContent, never HTML.
-function el(tag, props = {}, ...kids) {
-  const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(props)) {
-    if (k === "class") n.className = v;
-    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
-    else if (k === "text") n.textContent = v;
-    else if (v !== false && v != null) n.setAttribute(k, v === true ? "" : v);
-  }
-  n.append(...kids.filter((c) => c != null));
-  return n;
 }
 
 // A time box whose edits are saved when you leave it, press Enter, or pause for
@@ -519,10 +418,18 @@ document.addEventListener("focusout", () => {
   });
 });
 
-// One shared <datalist> of past notes per category, for every note box.
+// One shared <datalist> per category for every note box: the official tasks
+// first, then notes typed under that category before. Plus the official clients.
 function renderNoteLists() {
-  $("note-lists").replaceChildren(...CATEGORIES.map((cat) =>
-    el("datalist", { id: `notes-${cat.key}` }, ...noteSuggestions(state, cat.key).map((n) => el("option", { value: n })))));
+  const options = (names) => names.map((n) => el("option", { value: n }));
+  const notesFor = (key) => {
+    const official = tasksFor(lists, key);
+    const seen = new Set(official.map((t) => t.toLowerCase()));
+    return [...official, ...noteSuggestions(state, key).filter((n) => !seen.has(n.toLowerCase()))];
+  };
+  $("note-lists").replaceChildren(
+    el("datalist", { id: "official-clients" }, ...options(lists.clients)),
+    ...CATEGORIES.map((cat) => el("datalist", { id: `notes-${cat.key}` }, ...options(notesFor(cat.key)))));
 }
 
 // A category dropdown and a note box. The note only opens once a category is
@@ -530,7 +437,7 @@ function renderNoteLists() {
 function tagControls({ category, note, onCategory, onNote, label }) {
   const select = el("select", { class: "tag-category", "aria-label": `${label}: category`, onchange: (e) => onCategory(e.target.value) },
     el("option", { value: "", text: "No category" }),
-    ...CATEGORIES.map((c) => el("option", { value: c.key, text: c.label })));
+    ...CATEGORIES.map((c) => el("option", { value: c.key, text: phaseLabel(lists, c.key) })));
   select.value = category;
   const input = el("input", {
     type: "text",
@@ -822,7 +729,13 @@ function renderSettings() {
   $("lunch-restart").disabled = !state.settings.lunchStop;
   for (const r of document.querySelectorAll('input[name="sheet-layout"]')) r.checked = r.value === state.settings.sheetLayout;
   if (document.activeElement !== $("employee")) $("employee").value = state.settings.employee;
-  $("employee").hidden = state.settings.sheetLayout !== "all";
+  $("lists-wrap").hidden = !hasLists(lists);
+  if (hasLists(lists)) {
+    const tasks = new Set(Object.values(lists.tasks).flat().map((t) => t.toLowerCase())).size;
+    $("lists-note").textContent = `${plural(lists.clients.length, "client", "clients")} and ${plural(tasks, "task", "tasks")}` +
+      `${lists.by ? ` from ${lists.by}` : ""}${lists.updated ? `, updated ${new Date(lists.updated).toLocaleDateString()}` : ""}. ` +
+      "They are suggested as you type, and a client not on the list asks before it is added.";
+  }
   $("sheet-note").textContent = state.settings.sheetLayout === "all"
     ? "Copy a client with its button, open that client's sheet, click the first empty Date cell and paste."
     : "Copy a client with its button, open that client's sheet, click the first empty Notes cell and paste.";
@@ -911,6 +824,7 @@ function tick() {
 
 async function handleHash() {
   const h = location.hash;
+  if (h.startsWith("#lists=")) return handleListsLink(h);
   if (!h.startsWith("#sync=") && !h.startsWith("#import=")) return;
 
   if (h.startsWith("#sync=")) {
@@ -931,6 +845,23 @@ async function handleHash() {
   } catch {
     toast("That transfer link is damaged or incomplete.");
   }
+}
+
+async function handleListsLink(h) {
+  history.replaceState(null, "", location.pathname + location.search);
+  let next;
+  try {
+    next = await decodeLists(h);
+  } catch {
+    return toast("That lists link is damaged or incomplete.");
+  }
+  const tasks = new Set(Object.values(next.tasks).flat().map((t) => t.toLowerCase())).size;
+  const from = next.by ? ` from ${next.by}` : "";
+  if (!confirm(`Use the official lists${from}: ${plural(next.clients.length, "client", "clients")} and ${plural(tasks, "task", "tasks")}? Your own clients and hours stay as they are.`)) return;
+  if (!storage.set(LISTS_KEY, JSON.stringify(next))) return toast("Couldn't save the lists: browser storage is full or blocked.");
+  lists = next;
+  render();
+  toast("Official lists saved. They're suggested as you type.");
 }
 
 /* ---------- wiring ---------- */
@@ -964,6 +895,23 @@ for (const r of document.querySelectorAll('input[name="sheet-layout"]')) {
   });
 }
 $("employee").addEventListener("change", (e) => setSetting("employee", e.target.value.trim()));
+
+$("hours-btn").addEventListener("click", guarded(async () => {
+  const name = state.settings.employee;
+  if (!name) {
+    $("employee").focus();
+    return toast("Add your full name under Copy for Sheets first, so the reviewer knows whose hours these are.");
+  }
+  const f = hoursFile(state, $("hours-from").value, $("hours-to").value, Date.now());
+  download(hoursFileName(f), JSON.stringify(f, null, 1), "application/json");
+  toast(f.lines.length ? `Saved ${plural(f.lines.length, "line", "lines")}. Send the file to whoever reviews hours.` : "Saved, but there are no hours on those days.");
+}));
+$("lists-remove").addEventListener("click", () => {
+  if (!confirm("Stop using the official lists on this device? Your clients and hours are not changed.")) return;
+  storage.remove(LISTS_KEY);
+  lists = loadLists();
+  render();
+});
 $("csv-btn").addEventListener("click", () => download(`billable-${viewDay}.csv`, csvFor(state, viewDay, Date.now()), "text/csv"));
 
 $("add-entry").addEventListener("submit", (e) => {
@@ -1042,8 +990,9 @@ $("safari-tip-close").addEventListener("click", () => {
 
 // Another tab changed the data: adopt it rather than overwrite it later.
 window.addEventListener("storage", (e) => {
-  if (e.key !== STATE_KEY) return;
-  state = loadState();
+  if (e.key === LISTS_KEY) lists = loadLists();
+  else if (e.key === STATE_KEY) state = loadState();
+  else return;
   render();
 });
 
@@ -1052,6 +1001,8 @@ window.addEventListener("storage", (e) => {
 $("summary-wrap").open = storage.get(SUMMARY_OPEN_KEY) === "1";
 $("summary-wrap").addEventListener("toggle", (e) => storage.set(SUMMARY_OPEN_KEY, e.target.open ? "1" : "0"));
 $("timeline-wrap").open = storage.get(TIMELINE_OPEN_KEY) !== "0";
+$("hours-from").value = weekStart(dayKey(Date.now()));
+$("hours-to").value = dayKey(Date.now());
 $("timeline-wrap").addEventListener("toggle", (e) => storage.set(TIMELINE_OPEN_KEY, e.target.open ? "1" : "0"));
 
 // Offline: a service worker keeps the app itself on the device. The URL

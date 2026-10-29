@@ -50,6 +50,34 @@ next one started on that card, are labelled with them.
   opens with no signal. It never handles data or `/api/` requests, and each deploy
   installs a fresh copy.
 
+## Reviewing everyone's hours (`/review.html`)
+
+A separate page for whoever compiles the team's hours. It is not linked from the
+app, and keeps the same promise: nothing leaves the browser.
+
+- **Hours come in as files.** In the app, Settings, then **Send hours for review**,
+  saves one person's lines for a date range (each day's lines, rounded as in their
+  summary) as `billable-hours-<name>-<from>-to-<to>.json`. They send it however
+  they like. The reviewer drops everyone's files on the page. A newer file for the
+  same days replaces that person's older lines.
+- **Official lists go out as a link.** The reviewer enters the client names (the
+  timesheet Sheet's tab names), names for P0 to P8, and tasks per category, then
+  copies a link or shows a QR code. The lists ride after the `#`, so they are never
+  sent to or stored on the server, which matters because client names are
+  confidential. Opening the link saves the lists on that device: clients and tasks
+  are suggested as people type, phase names show in the category dropdown, and a
+  client not on the list asks before it is added.
+- **Checks** flag clients not on the list (with a one-step mapping to the official
+  name, remembered for later files), tasks not on their category's own list, time
+  with no category, weekdays a person's files do not cover, and files saved while a
+  timer was running.
+- **Hours by client** adds up each person's rounded daily lines, the numbers they
+  would have pasted themselves, with a per-client copy in the timesheet's five
+  columns and a Reviewed tick per client per period. **At a glance** splits the
+  period by person and by category.
+- **Hand off**: email or copy a summary, or save every line or the totals as CSV.
+- The review data lives in that browser's storage, with export and import.
+
 ## Privacy model
 
 The default build makes one promise, and the browser enforces it: **after the page
@@ -171,7 +199,10 @@ src/js/config.js            build switches (SYNC_ENABLED), rewritten by the Dock
 src/js/model.js             state, time maths, rounding, merging      (pure)
 src/js/bytes.js             base64url and compression                 (pure)
 src/js/transfer.js          transfer-link encode, decode and import   (pure)
+src/js/review-model.js      hours files, official lists, compiling    (pure)
 src/js/app.js               storage, rendering and event wiring
+src/js/ui.js                DOM helpers shared by both pages
+src/review.html, review.js  the review page
 src/js/sync-ui.js           sync UI, loaded only by sync builds       ┐
 src/js/sync.js              pull, merge, push; timeouts; 409 retry    │ removed from
 src/js/crypto.js            key derivation, encryption                │ builds without
@@ -203,6 +234,7 @@ network that only the front container joins. If you are not behind Cloudflare, s
 ```sh
 npm test                                            # unit tests, about two seconds
 node tests/e2e/two-devices.mjs http://localhost:8175   # needs: npm i --no-save playwright
+node tests/e2e/review.mjs http://localhost:8175        # the review flow, end to end
 ```
 
 - **Unit tests** cover:

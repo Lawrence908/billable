@@ -25,7 +25,7 @@ RUN set -eu; \
     fi; \
     sed -i -e "/<!-- $drop:start -->/,/<!-- $drop:end -->/d" -e "/<!-- $keep:\(start\|end\) -->/d" "$html/index.html"; \
     sed -i -e "/# $drop:start/,/# $drop:end/d" -e "/# $keep:\(start\|end\)/d" -e "s/__CONNECT_SRC__/$connect/" "$conf"; \
-    sed -i -e "s/__CONNECT_SRC__/$connect/" -e "s|__BUILD_TIME__|${BUILD_TIME}|g" -e "s|__BUILD_ID__|${BUILD_ID}|g" "$html/index.html"; \
+    sed -i -e "s/__CONNECT_SRC__/$connect/" -e "s|__BUILD_TIME__|${BUILD_TIME}|g" -e "s|__BUILD_ID__|${BUILD_ID}|g" "$html/index.html" "$html/review.html"; \
     sed -i "s|__BUILD_ID__|${BUILD_ID}|g" "$html/sw.js"; \
     sed -i -E "s#(from \"\./[a-z-]+\.js)\"#\1?v=${BUILD_ID}\"#g" "$html"/js/*.js; \
     nginx -t

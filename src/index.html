@@ -46,7 +46,7 @@
   <section aria-labelledby="clients-h">
     <h2 id="clients-h" class="section-h">Clients</h2>
     <form id="add-client" class="add-client" autocomplete="off">
-      <input id="client-name" name="name" type="text" placeholder="Client name" maxlength="80" required aria-label="Client name">
+      <input id="client-name" name="name" type="text" placeholder="Client name" maxlength="80" required aria-label="Client name" list="official-clients">
       <button type="submit" class="btn btn-primary">Add</button>
     </form>
     <p class="empty" id="clients-empty">Type a client name and press Add. Each client gets its own start and stop button, and stays here for tomorrow.</p>
@@ -210,6 +210,21 @@
       <input id="employee" type="text" maxlength="80" autocomplete="name" placeholder="Your full name, exactly as in the sheet's Employee list" aria-label="Employee name for the sheet">
       <p class="note">The Notes cell gets only the note (P2 · AR Replication pastes as AR Replication). With all five columns, Costing section gets the category name. Lines that round to 0.00 h are left out.</p>
     </fieldset>
+    <fieldset class="hours-send">
+      <legend class="label">Send hours for review</legend>
+      <div class="send-row">
+        <input id="hours-from" type="date" aria-label="First day">
+        <span class="dash">to</span>
+        <input id="hours-to" type="date" aria-label="Last day">
+        <button type="button" class="btn" id="hours-btn">Save hours file</button>
+      </div>
+      <p class="note">Saves your lines for those days, rounded as in the summary, as a file to send to whoever reviews hours. It uses your name from above. Nothing is sent from here.</p>
+    </fieldset>
+    <div id="lists-wrap" hidden>
+      <p class="label">Official lists</p>
+      <p class="note" id="lists-note"></p>
+      <div class="send-row"><button type="button" class="btn btn-small" id="lists-remove">Stop using them</button></div>
+    </div>
     <div id="archived-wrap">
       <p class="label">Removed clients</p>
       <ul class="archived" id="archived"></ul>
