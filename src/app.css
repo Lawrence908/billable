@@ -526,7 +526,7 @@ input:focus-visible, select:focus-visible, .btn:focus-visible {
 .glance { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); gap: 1.25rem; align-items: start; }
 .field { display: grid; gap: 0.3rem; margin: 0.75rem 0 0; }
 .phase-grid, .task-grid { display: grid; gap: 0.6rem; margin-bottom: 0.9rem; }
-.phase-grid { grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); }
+.phase-grid { grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); }
 .task-grid { grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); }
 .phase-grid .field, .task-grid .field { margin: 0; }
 textarea {

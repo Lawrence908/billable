@@ -6,8 +6,8 @@
 
 import { CATEGORIES, dayKey, fmtHours, shiftDay } from "./model.js";
 import {
-  addHoursFile, clientTSV, compile, detailCSV, encodeLists, handoffText, normaliseLists, normaliseReview, parseHoursFile, parseList,
-  phaseLabel, removePerson, reviewedFor, setAlias, setReviewed, totalsCSV, weekStart,
+  addHoursFile, addOfficialClient, addOfficialTask, clientTSV, compile, detailCSV, encodeLists, handoffText, normaliseLists, normaliseReview, parseHoursFile, parseList,
+  phaseLabel, removePerson, reviewedFor, setAlias, setReviewed, setTaskAlias, totalsCSV, weekStart,
 } from "./review-model.js";
 import { copyText, download, el, guarded, renderQR, storage, toast } from "./ui.js";
 
@@ -122,21 +122,37 @@ function renderPeople(c) {
     }));
 }
 
+// A check that can be fixed: map it to an official name, or add it to the list.
+function mapSelect(label, prompt, names, onPick) {
+  return el("select", { "aria-label": label, onchange: (e) => { if (e.target.value) onPick(e.target.value); } },
+    el("option", { value: "", text: prompt }), ...names.map((n) => el("option", { value: n, text: n })));
+}
+const addButton = (label, onclick) => el("button", { type: "button", class: "btn btn-small", text: "Add to list", "aria-label": label, onclick });
+
+// Changes the lists from a check. Edits waiting in the lists editor are kept
+// and saved along with it.
+function changeLists(fn) {
+  review = { ...review, lists: readListsEditor() };
+  commit(fn(review));
+  renderListsEditor();
+}
+
 function renderChecks(c) {
   const { checks } = c;
   const items = [];
-  const officialOptions = () => [el("option", { value: "", text: "Map to an official client..." }), ...review.lists.clients.map((n) => el("option", { value: n, text: n }))];
   for (const u of checks.unknownClients) {
-    const select = el("select", {
-      "aria-label": `Official name for ${u.name}`,
-      onchange: (e) => { if (e.target.value) commit(setAlias(review, u.name, e.target.value)); },
-    }, ...officialOptions());
     items.push(el("li", {},
       el("span", { text: `"${u.name}" isn't an official client (${fmtHours(u.hours)} h from ${u.people.join(", ")}).` }),
-      review.lists.clients.length ? select : null));
+      review.lists.clients.length
+        ? mapSelect(`Official name for ${u.name}`, "Map to an official client...", review.lists.clients, (v) => commit(setAlias(review, u.name, v)))
+        : null,
+      addButton(`Add ${u.name} to the official clients`, () => changeLists((r) => addOfficialClient(r, u.name, Date.now())))));
   }
   for (const t of checks.otherTasks) {
-    items.push(el("li", {}, el("span", { text: `${t.label}: "${t.note || "no task"}" isn't on the task list (${fmtHours(t.hours)} h from ${t.people.join(", ")}).` })));
+    items.push(el("li", {},
+      el("span", { text: `${t.label}: "${t.note || "no task"}" isn't on the task list (${fmtHours(t.hours)} h from ${t.people.join(", ")}).` }),
+      t.note ? mapSelect(`Official task for ${t.note}`, "Map to an official task...", t.tasks, (v) => commit(setTaskAlias(review, t.category, t.note, v))) : null,
+      t.note ? addButton(`Add ${t.note} to the ${t.label} tasks`, () => changeLists((r) => addOfficialTask(r, t.category, t.note, Date.now()))) : null));
   }
   for (const n of checks.noCategory) {
     items.push(el("li", {}, el("span", { text: `${n.employee} has ${fmtHours(n.hours)} h on ${n.client} with no category.` })));
@@ -147,11 +163,17 @@ function renderChecks(c) {
   for (const r of checks.running) {
     items.push(el("li", {}, el("span", { text: `${r} had a timer running when they saved their file, so its time was counted up to that moment.` })));
   }
-  // Aliases already set, so a wrong one can be undone.
+  // Mappings already set, so a wrong one can be undone.
   for (const [typed, official] of Object.entries(review.aliases)) {
     items.push(el("li", { class: "muted" },
       el("span", { text: `Counting "${typed}" as ${official}.` }),
       el("button", { type: "button", class: "btn btn-small", text: "Undo", onclick: () => commit(setAlias(review, typed, "")) })));
+  }
+  for (const [key, official] of Object.entries(review.taskAliases)) {
+    const [category, typed] = key.split("\u0000");
+    items.push(el("li", { class: "muted" },
+      el("span", { text: `Counting "${typed}" under ${phaseLabel(review.lists, category)} as ${official}.` }),
+      el("button", { type: "button", class: "btn btn-small", text: "Undo", onclick: () => commit(setTaskAlias(review, category, typed, "")) })));
   }
   const problems = items.filter((li) => !li.classList.contains("muted")).length;
   $("checks-badge").textContent = problems ? plural(problems, "thing to check", "things to check") : "All clear";
@@ -209,9 +231,9 @@ function renderListsEditor() {
   const { lists } = review;
   $("lists-by").value = lists.by;
   $("lists-clients").value = lists.clients.join("\n");
-  $("lists-phases").replaceChildren(...CATEGORIES.filter((c) => /^p\d$/.test(c.key)).map((c) => el("label", { class: "field" },
+  $("lists-phases").replaceChildren(...CATEGORIES.map((c) => el("label", { class: "field" },
     el("span", { class: "label", text: c.label }),
-    el("input", { type: "text", maxlength: "40", "data-phase": c.key, value: lists.phases[c.key] || "", placeholder: "Name (optional)" }))));
+    el("input", { type: "text", maxlength: "80", "data-phase": c.key, value: lists.phases[c.key] || "", placeholder: "As in the Sheet (optional)" }))));
   const groups = [{ key: "*", label: "All categories" }, ...CATEGORIES.map((c) => ({ key: c.key, label: phaseLabel(lists, c.key) }))];
   $("lists-tasks").replaceChildren(...groups.map((g) => {
     const area = el("textarea", { rows: "4", "data-tasks": g.key });
@@ -234,6 +256,7 @@ function saveLists() {
   renderListsEditor();
   render();
 }
+
 
 async function listsLink() {
   saveLists();

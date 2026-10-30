@@ -131,8 +131,8 @@ check("the mapping can be undone from Checks", (await rev.p.$$eval("#checks li",
 
 await rev.p.click('#clients tr.client-row:has-text("Summit Drywall") button');
 await rev.p.waitForTimeout(150);
-check("a client's rows copy in the timesheet's five columns", (await clipboard(rev.p)) ===
-  `10/19/2026\tSam Lee\tP2\tGL mapping\t2.00\n10/21/2026\tAlex Doe\tProject Management\tMeeting\t0.25`, JSON.stringify(await clipboard(rev.p)));
+check("a client's rows copy in the timesheet's five columns, with the official Costing section name", (await clipboard(rev.p)) ===
+  `10/19/2026\tSam Lee\tData conversion\tGL mapping\t2.00\n10/21/2026\tAlex Doe\tProject Management\tMeeting\t0.25`, JSON.stringify(await clipboard(rev.p)));
 
 await rev.p.check('#clients tr.client-row:has-text("Summit Drywall") input[type="checkbox"]');
 check("reviewed ticks are counted", (await rev.p.textContent("#reviewed-badge")) === "1 of 2 reviewed");
@@ -144,6 +144,17 @@ check("the detail CSV has every person's line", lines.length === 5 && lines[0].s
 await rev.p.click("#copy-summary");
 await rev.p.waitForTimeout(150);
 check("the summary reads as a hand-off", /^Billable hours, 2026-10-19 to 2026-10-23\n\nCoastal Interiors Ltd\.: 2\.50 h\n {2}P2 · Data conversion · Brand new task: 1\.00 h/.test(await clipboard(rev.p)));
+
+// Tasks: map one to an official task, undo it, then add it to the list instead.
+await rev.p.selectOption('#checks li:has-text("Brand new task") select', "Data import");
+let after = await rev.p.$$eval("#checks li", (l) => l.map((x) => x.textContent));
+check("a task can be mapped to an official one", !after.some((c) => /"Brand new task" isn't on the task list/.test(c))
+  && after.some((c) => /Counting "brand new task" under P2 · Data conversion as Data import\./.test(c)), after.join(" / "));
+await rev.p.click('#checks li:has-text("Counting \\"brand new task\\"") button');
+await rev.p.click('#checks li:has-text("Brand new task") button:has-text("Add to list")');
+after = await rev.p.$$eval("#checks li", (l) => l.map((x) => x.textContent));
+check("a task can be added to the list from Checks", !after.some((c) => /Brand new task/.test(c))
+  && (await rev.p.inputValue('[data-tasks="p2"]')).split("\n").includes("Brand new task"));
 
 recording = false; // a reload is an ordinary page load
 await rev.p.reload({ waitUntil: "networkidle" });

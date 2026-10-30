@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { atTime, normalise } from "../src/js/model.js";
 import {
-  addHoursFile, blankReview, clientName, clientTSV, compile, daysBetween, decodeLists, detailCSV, encodeLists, handoffText,
+  addHoursFile, addOfficialClient, addOfficialTask, blankReview, costingLabel, setTaskAlias, clientName, clientTSV, compile, daysBetween, decodeLists, detailCSV, encodeLists, handoffText,
   hoursFile, hoursFileName, normaliseLists, normaliseReview, parseHoursFile, parseList, phaseLabel, removePerson, setAlias,
   setReviewed, reviewedFor, tasksFor, totalsCSV, weekStart,
 } from "../src/js/review-model.js";
@@ -177,9 +177,9 @@ test("reviewed ticks are kept per period", () => {
 test("lists: one name per line, round trip through a link, junk dropped", async () => {
   assert.deepEqual(parseList(" Acme \n\nacme\nBeta\r\n"), ["Acme", "Beta"]);
   const lists = normaliseLists({
-    clients: ["Acme", "Beta"], phases: { p2: "Data conversion", pm: "not a phase" }, tasks: { p2: ["Import"], bogus: ["x"], "*": ["Meeting"] }, by: "Chris", updated: 5,
+    clients: ["Acme", "Beta"], phases: { p2: "Data conversion", pm: "PROJECT MANAGEMENT", bogus: "x" }, tasks: { p2: ["Import"], bogus: ["x"], "*": ["Meeting"] }, by: "Chris", updated: 5,
   });
-  assert.deepEqual(lists, { clients: ["Acme", "Beta"], phases: { p2: "Data conversion" }, tasks: { p2: ["Import"], "*": ["Meeting"] }, by: "Chris", updated: 5 });
+  assert.deepEqual(lists, { clients: ["Acme", "Beta"], phases: { p2: "Data conversion", pm: "PROJECT MANAGEMENT" }, tasks: { p2: ["Import"], "*": ["Meeting"] }, by: "Chris", updated: 5 });
   const link = await encodeLists(lists, "https://billable.example");
   assert.match(link, /^https:\/\/billable\.example\/#lists=z/);
   assert.deepEqual(await decodeLists(link), lists);
@@ -196,4 +196,57 @@ test("a saved review store survives a round trip and drops damage", () => {
   assert.equal(back.people.alex.lines.length, 1);
   assert.deepEqual(normaliseReview({ people: { x: { employee: "", lines: [] } }, aliases: { a: "" } }).people, {});
   assert.deepEqual(normaliseReview(null), blankReview());
+});
+
+test("category names: no doubled phase code on screen, and the exact text for the Costing section", () => {
+  const lists = normaliseLists({ phases: {
+    p1: "PHASE 1: DATA LISTINGS/FORM CUSTOMIZATION (a name longer than forty characters)", p2: "Contract/Billings", p3: "P3 - Setup", pm: "PROJECT MANAGEMENT",
+  } });
+  assert.equal(phaseLabel(lists, "p1"), "PHASE 1: DATA LISTINGS/FORM CUSTOMIZATION (a name longer than forty characters)");
+  assert.equal(phaseLabel(lists, "p2"), "P2 · Contract/Billings");
+  assert.equal(phaseLabel(lists, "p3"), "P3 - Setup");
+  assert.equal(phaseLabel(lists, "pm"), "PROJECT MANAGEMENT");
+  assert.equal(phaseLabel(lists, "p4"), "P4");
+  assert.equal(costingLabel(lists, "p2"), "Contract/Billings");
+  assert.equal(costingLabel(lists, "p4"), "P4");
+});
+
+test("tasks: mapping counts a typed task as an official one; the hand-off keeps both", () => {
+  const alex = person("Alex", [
+    ["Acme", "2026-10-26", "09:00", "10:00", "p2", "AR Replication and Verification"],
+    ["Acme", "2026-10-27", "09:00", "10:00", "p2", "AR Replication"],
+  ]);
+  let r = blankReview();
+  r.lists = normaliseLists({ phases: { p2: "PHASE 2: CONTRACT/BILLINGS" }, tasks: { p2: ["AR replication"] } });
+  r = addHoursFile(r, file(alex, "2026-10-26", "2026-10-30"), 1);
+  let c = compile(r, "2026-10-26", "2026-10-30");
+  assert.deepEqual(c.checks.otherTasks.map((t) => [t.label, t.note, t.tasks]), [["PHASE 2: CONTRACT/BILLINGS", "AR Replication and Verification", ["AR replication"]]]);
+
+  r = setTaskAlias(r, "p2", "ar replication AND verification", "AR replication");
+  c = compile(r, "2026-10-26", "2026-10-30");
+  assert.deepEqual(c.checks.otherTasks, []);
+  assert.deepEqual(c.clients[0].lines.map((l) => [l.label, l.hours]), [["PHASE 2: CONTRACT/BILLINGS · AR replication", 2]]);
+  assert.equal(clientTSV(c, "Acme"), "10/26/2026\tAlex\tPHASE 2: CONTRACT/BILLINGS\tAR replication\t1.00\n10/27/2026\tAlex\tPHASE 2: CONTRACT/BILLINGS\tAR replication\t1.00");
+  assert.match(detailCSV(c).split("\r\n")[1], /,"PHASE 2: CONTRACT\/BILLINGS","AR replication",1\.00,1\.00,"Acme",yes,"AR Replication and Verification"$/);
+  assert.equal(totalsCSV(c).split("\r\n")[1], `"Acme","PHASE 2: CONTRACT/BILLINGS","AR replication",2.00`);
+
+  // Undone, the check comes back; the mapping survives a save and load.
+  assert.equal(compile(setTaskAlias(r, "p2", "AR Replication and Verification", ""), "2026-10-26", "2026-10-30").checks.otherTasks.length, 1);
+  assert.deepEqual(normaliseReview(JSON.parse(JSON.stringify(r))).taskAliases, r.taskAliases);
+});
+
+test("adding to the lists from a check clears it", () => {
+  const alex = person("Alex", [["PLEXXIS", "2026-10-26", "09:00", "10:00", "internal", "Manuals Update"]]);
+  let r = blankReview();
+  r.lists = normaliseLists({ clients: ["Tradition Homes"], tasks: { internal: ["Training"] } });
+  r = addHoursFile(r, file(alex, "2026-10-26", "2026-10-30"), 1);
+  let c = compile(r, "2026-10-26", "2026-10-30");
+  assert.equal(c.checks.unknownClients.length, 1);
+  assert.equal(c.checks.otherTasks.length, 1);
+  r = addOfficialTask(addOfficialClient(r, "PLEXXIS", 7), "internal", "Manuals Update", 7);
+  c = compile(r, "2026-10-26", "2026-10-30");
+  assert.deepEqual([c.checks.unknownClients, c.checks.otherTasks], [[], []]);
+  assert.deepEqual(r.lists.clients, ["Tradition Homes", "PLEXXIS"]);
+  assert.deepEqual(r.lists.tasks.internal, ["Training", "Manuals Update"]);
+  assert.equal(r.lists.updated, 7);
 });

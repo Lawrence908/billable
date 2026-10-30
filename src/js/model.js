@@ -284,7 +284,9 @@ export function csvFor(st, key, now) {
 // round to zero hours are left out. Notes is only the note: the category is
 // either its own Costing section column (all five columns) or picked by hand
 // in the sheet after pasting (Notes and Hours).
-export function sheetRows(st, key, now, clientId) {
+// `costing` names a category for the Costing section column; the app passes
+// the official names when it has the reviewer's lists.
+export function sheetRows(st, key, now, clientId, costing = categoryLabel) {
   const { sheetLayout, employee } = st.settings;
   const [y, m, d] = key.split("-");
   const date = `${m}/${d}/${y}`;
@@ -293,7 +295,7 @@ export function sheetRows(st, key, now, clientId) {
   return row.lines
     .filter((l) => l.hours)
     .map((l) => sheetLayout === "all"
-      ? [date, employee, categoryLabel(l.category), l.note, fmtHours(l.hours)]
+      ? [date, employee, costing(l.category), l.note, fmtHours(l.hours)]
       : [l.note, fmtHours(l.hours)]);
 }
 

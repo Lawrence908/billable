@@ -16,7 +16,7 @@ import {
 import { SYNC_ENABLED } from "./config.js";
 import { applyTransfer, buildTransfer, decodeTransfer, encodeTransfer } from "./transfer.js";
 import { copyText, download, el, guarded, renderQR, storage, toast } from "./ui.js";
-import { decodeLists, hasLists, hoursFile, hoursFileName, normaliseLists, officialClient, phaseLabel, tasksFor, weekStart } from "./review-model.js";
+import { costingLabel, decodeLists, hasLists, hoursFile, hoursFileName, normaliseLists, officialClient, phaseLabel, tasksFor, weekStart } from "./review-model.js";
 
 const STATE_KEY = "billable.v1";
 const SYNC_KEY = "billable.sync"; // only read to delete it when sync is off
@@ -54,6 +54,9 @@ let state = loadState();
 let lists = loadLists();
 let viewDay = dayKey(Date.now());
 let saveWarned = false;
+
+// The Costing section column gets the official category names, once there are any.
+const costing = (key) => costingLabel(lists, key);
 
 // Official client, phase and task names, opened from the reviewer's link.
 // Kept apart from the hours: they belong to the reviewer, not to this person.
@@ -324,7 +327,7 @@ const copied = (() => {
 const isCopied = (clientId, tsv) => copied[viewDay]?.[clientId] === tsv;
 
 async function copyClient(clientId) {
-  const rows = sheetRows(state, viewDay, Date.now(), clientId);
+  const rows = sheetRows(state, viewDay, Date.now(), clientId, costing);
   const name = clientById(state, clientId).name;
   if (!rows.length) return toast(`Nothing over 0.00 h to copy for ${name}.`);
   const tsv = toTSV(rows);
@@ -654,7 +657,7 @@ function renderSummary(now) {
     body.replaceChildren(el("tr", { class: "none" }, el("td", { colspan: "4", text: "No time recorded on this day." })));
   } else {
     body.replaceChildren(...rows.flatMap((r) => {
-      const sheet = sheetRows(state, viewDay, now, r.client.id);
+      const sheet = sheetRows(state, viewDay, now, r.client.id, costing);
       const done = sheet.length > 0 && isCopied(r.client.id, toTSV(sheet));
       const copyLabel = done ? `${r.client.name} copied for Sheets. Copy again` : `Copy ${r.client.name} for Sheets`;
       return [

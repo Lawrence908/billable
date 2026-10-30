@@ -304,6 +304,8 @@ try {
     localStorage.setItem("billable.v1", JSON.stringify({
       clients: [{ id: "a", name: "Acme Corp", updated: 1 }, { id: "b", name: "Northwind", updated: 1 }],
       sessions: [{ id: "y", clientId: "a", start: at(1, 17, 0), end: null, updated: 1 }],
+      // Lunch off: after noon on a weekday it would already have stopped this timer.
+      settings: { lunchStop: false, updated: 1 },
     }));
   });
   check("a timer left running overnight raises a prompt", /running since/.test(await G.p.textContent("#nudges")));

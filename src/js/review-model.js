@@ -92,7 +92,7 @@ export function parseHoursFile(raw) {
 /* ---------- the reviewer's store ---------- */
 
 export function blankReview() {
-  return { lists: blankLists(), people: {}, aliases: {}, reviewed: {}, period: null, arEmail: "" };
+  return { lists: blankLists(), people: {}, aliases: {}, taskAliases: {}, reviewed: {}, period: null, arEmail: "" };
 }
 
 // Adds one person's file. Their lines inside the file's dates are replaced, so
@@ -135,6 +135,10 @@ export function normaliseReview(r) {
   for (const [k, v] of Object.entries(r.aliases && typeof r.aliases === "object" ? r.aliases : {})) {
     if (text(v)) out.aliases[fold(k)] = text(v);
   }
+  for (const [k, v] of Object.entries(r.taskAliases && typeof r.taskAliases === "object" ? r.taskAliases : {})) {
+    const [category, note] = k.split("\u0000");
+    if (CATEGORY_KEYS.has(category) && note && text(v)) out.taskAliases[taskKey(category, note)] = text(v);
+  }
   for (const [period, clients] of Object.entries(r.reviewed && typeof r.reviewed === "object" ? r.reviewed : {})) {
     if (clients && typeof clients === "object") out.reviewed[period] = Object.fromEntries(Object.entries(clients).filter(([, v]) => v === true));
   }
@@ -145,7 +149,8 @@ export function normaliseReview(r) {
 
 /* ---------- official lists ---------- */
 
-// { clients: [names], phases: { p0: "Discovery", ... }, tasks: { p2: [...], "*": [...] }, by, updated }
+// { clients: [names], phases: { p2: "PHASE 2: CONTRACT/BILLINGS", ... }, tasks: { p2: [...], "*": [...] }, by, updated }
+// `phases` names any category as the timesheet's Costing section writes it.
 // "*" holds tasks that belong under every category (meetings, admin).
 export function blankLists() {
   return { clients: [], phases: {}, tasks: {}, by: "", updated: 0 };
@@ -172,7 +177,7 @@ export function normaliseLists(l) {
   if (!l || typeof l !== "object") return out;
   out.clients = uniqueNames(l.clients).slice(0, 2000);
   for (const c of CATEGORIES) {
-    if (/^p\d$/.test(c.key) && text(l.phases?.[c.key], 40)) out.phases[c.key] = text(l.phases[c.key], 40);
+    if (text(l.phases?.[c.key])) out.phases[c.key] = text(l.phases[c.key]);
   }
   for (const key of [...CATEGORIES.map((c) => c.key), "*"]) {
     const t = uniqueNames(l.tasks?.[key]).slice(0, 200);
@@ -185,9 +190,20 @@ export function normaliseLists(l) {
 
 export const hasLists = (l) => !!l && (l.clients.length > 0 || Object.keys(l.tasks).length > 0 || Object.keys(l.phases).length > 0);
 
-// "P2 · Data conversion" when the phase has a name, else the plain label.
-export const phaseLabel = (lists, key) =>
-  lists?.phases?.[key] ? `${categoryLabel(key)} · ${lists.phases[key]}` : categoryLabel(key);
+// How a category reads on screen: "P2 · Contract/Billings" when the phase has
+// a name, just the name when it already says which phase it is ("PHASE 2:
+// CONTRACT/BILLINGS"), and the plain label otherwise.
+export function phaseLabel(lists, key) {
+  const name = lists?.phases?.[key];
+  if (!name) return categoryLabel(key);
+  const n = key.match(/^p(\d)$/)?.[1];
+  if (!n || new RegExp(`^(phase\\s*0*${n}|p${n})\\b`, "i").test(name)) return name;
+  return `${categoryLabel(key)} · ${name}`;
+}
+
+// What goes in the timesheet's Costing section column: the official name
+// exactly as entered, else the plain label.
+export const costingLabel = (lists, key) => lists?.phases?.[key] || categoryLabel(key);
 
 // The official tasks for a category: its own, then the shared ones.
 export const tasksFor = (lists, category) =>
@@ -225,6 +241,26 @@ export function setReviewed(review, from, to, client, yes) {
   return { ...review, reviewed: { ...review.reviewed, [k]: cur } };
 }
 
+const taskKey = (category, note) => `${category}\u0000${fold(note)}`;
+
+// Counts a task typed under a category as one of the official ones.
+export function setTaskAlias(review, category, note, official) {
+  const taskAliases = { ...review.taskAliases };
+  if (official) taskAliases[taskKey(category, note)] = official;
+  else delete taskAliases[taskKey(category, note)];
+  return { ...review, taskAliases };
+}
+
+// Adds a name to the official lists, from a check: a client, or a task under a category.
+export function addOfficialClient(review, name, now) {
+  return { ...review, lists: normaliseLists({ ...review.lists, clients: [...review.lists.clients, name], updated: now }) };
+}
+
+export function addOfficialTask(review, category, task, now) {
+  const tasks = { ...review.lists.tasks, [category]: [...(review.lists.tasks[category] || []), task] };
+  return { ...review, lists: normaliseLists({ ...review.lists, tasks, updated: now }) };
+}
+
 export function setAlias(review, name, official) {
   const aliases = { ...review.aliases };
   if (official) aliases[fold(name)] = official;
@@ -258,10 +294,13 @@ export function compile(review, from, to) {
       if (l.date < from || l.date > to) continue;
       const client = clientName(review, l.client);
       const official = tasksFor(lists, l.category);
-      const task = official.find((t) => t.toLowerCase() === l.note.toLowerCase());
+      const mapped = l.category && l.note ? review.taskAliases[taskKey(l.category, l.note)] : null;
+      const wanted = (mapped || l.note).toLowerCase();
+      const task = official.find((t) => t.toLowerCase() === wanted) || (mapped && official.length ? null : mapped);
       rows.push({
         ...l,
         typedClient: l.client,
+        typedNote: l.note,
         client,
         employee: person.employee,
         note: task || l.note,
@@ -332,14 +371,14 @@ export function compile(review, from, to) {
     unknownClients: group(rows.filter((r) => !r.officialClient), (r) => r.typedClient.toLowerCase())
       .map((x) => ({ name: x.typedClient, hours: x.hours, people: x.people })),
     otherTasks: group(rows.filter((r) => r.otherTask), (r) => `${r.category}\u0000${r.note.toLowerCase()}`)
-      .map((x) => ({ category: x.category, label: phaseLabel(lists, x.category), note: x.note, hours: x.hours, people: x.people })),
+      .map((x) => ({ category: x.category, label: phaseLabel(lists, x.category), note: x.note, tasks: tasksFor(lists, x.category), hours: x.hours, people: x.people })),
     noCategory: group(rows.filter((r) => !r.category), (r) => `${r.employee}\u0000${r.client}`)
       .map((x) => ({ employee: x.employee, client: x.client, hours: x.hours })),
     missingDays: people.filter((p) => p.missing.length).map((p) => ({ employee: p.employee, days: p.missing })),
     running: people.filter((p) => p.running).map((p) => p.employee),
   };
 
-  return { from, to, rows, clients, people, categories, checks, hours: rows.reduce((a, r) => a + r.hours, 0) };
+  return { from, to, lists, rows, clients, people, categories, checks, hours: rows.reduce((a, r) => a + r.hours, 0) };
 }
 
 /* ---------- hand-off ---------- */
@@ -355,11 +394,11 @@ const sheetDate = (key) => {
 
 // Every person's line for every day, one row each.
 export function detailCSV(compiled) {
-  const out = ["date,employee,client,costing_section,notes,hours,tracked_hours,client_as_typed,official_task"];
+  const out = ["date,employee,client,costing_section,notes,hours,tracked_hours,client_as_typed,official_task,notes_as_typed"];
   for (const r of compiled.rows) {
     if (!r.hours) continue;
-    out.push([r.date, csvCell(r.employee), csvCell(r.client), csvCell(categoryLabel(r.category)), csvCell(r.note), fmtHours(r.hours),
-      (r.ms / HOUR).toFixed(2), csvCell(r.typedClient), r.category ? (r.otherTask ? "no" : "yes") : ""].join(","));
+    out.push([r.date, csvCell(r.employee), csvCell(r.client), csvCell(costingLabel(compiled.lists, r.category)), csvCell(r.note), fmtHours(r.hours),
+      (r.ms / HOUR).toFixed(2), csvCell(r.typedClient), r.category ? (r.otherTask ? "no" : "yes") : "", csvCell(r.typedNote)].join(","));
   }
   return out.join("\r\n") + "\r\n";
 }
@@ -368,7 +407,7 @@ export function detailCSV(compiled) {
 export function totalsCSV(compiled) {
   const out = ["client,costing_section,notes,hours"];
   for (const c of compiled.clients) {
-    for (const l of c.lines) if (l.hours) out.push([csvCell(c.name), csvCell(categoryLabel(l.category)), csvCell(l.note), fmtHours(l.hours)].join(","));
+    for (const l of c.lines) if (l.hours) out.push([csvCell(c.name), csvCell(costingLabel(compiled.lists, l.category)), csvCell(l.note), fmtHours(l.hours)].join(","));
   }
   return out.join("\r\n") + "\r\n";
 }
@@ -378,7 +417,7 @@ export function totalsCSV(compiled) {
 export function clientTSV(compiled, client) {
   return compiled.rows
     .filter((r) => r.client === client && r.hours)
-    .map((r) => [sheetDate(r.date), r.employee, categoryLabel(r.category), r.note, fmtHours(r.hours)].map(tsvCell).join("\t"))
+    .map((r) => [sheetDate(r.date), r.employee, costingLabel(compiled.lists, r.category), r.note, fmtHours(r.hours)].map(tsvCell).join("\t"))
     .join("\n");
 }
 
