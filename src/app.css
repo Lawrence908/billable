@@ -92,7 +92,7 @@ h1::after {
 /* Controls */
 input, select, button { font: inherit; color: inherit; }
 
-input[type="text"], input[type="email"], input[type="time"], input[type="date"], select {
+input[type="text"], input[type="email"], input[type="search"], input[type="time"], input[type="date"], select {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -540,3 +540,51 @@ textarea {
   color-scheme: dark;
 }
 #lists-qr { margin-top: 0.9rem; }
+
+/* Review grid: a spreadsheet you drill into */
+.crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; font-size: 0.95rem; }
+.crumb { background: none; border: 0; padding: 0.15rem 0; color: var(--accent); cursor: pointer; font: inherit; }
+.crumb:hover { text-decoration: underline; }
+.crumb.here { color: var(--ink); font-weight: 600; cursor: default; }
+.crumb-sep { color: var(--muted); }
+.filters { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; margin: 0.4rem 0 0.8rem; }
+.filters .check { align-items: center; }
+.filters .check input { margin-top: 0; }
+.filters input[type="search"] { flex: 0 1 14rem; padding: 0.4rem 0.6rem; }
+.filters select { padding: 0.4rem 0.6rem; }
+.people-filter { position: relative; }
+.people-filter > summary { list-style: none; }
+.people-filter > summary::-webkit-details-marker { display: none; }
+.people-options { position: absolute; z-index: 5; top: calc(100% + 0.3rem); left: 0; min-width: 14rem; max-height: 18rem; overflow: auto; display: grid; gap: 0.35rem; padding: 0.6rem 0.75rem; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); }
+.grid-wrap { overflow: auto; max-height: 70vh; border: 1px solid var(--line); border-radius: 8px; }
+.grid { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; font-size: 0.9rem; }
+.grid th, .grid td { padding: 0.4rem 0.6rem; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); white-space: nowrap; text-align: left; }
+.grid thead th { position: sticky; top: 0; z-index: 2; background: var(--surface-2); color: var(--muted); font-weight: 600; font-size: 0.78rem; white-space: normal; overflow-wrap: anywhere; min-width: 4.5rem; max-width: 8.5rem; vertical-align: bottom; line-height: 1.25; }
+.grid thead th.corner { max-width: none; }
+.grid tbody th, .grid tfoot th { position: sticky; left: 0; z-index: 1; background: var(--surface); font-weight: 500; max-width: 22rem; overflow: hidden; text-overflow: ellipsis; }
+.grid thead th.corner { left: 0; z-index: 3; }
+.grid tfoot th, .grid tfoot td { position: sticky; bottom: 0; background: var(--surface-2); font-weight: 700; }
+.grid tfoot th { z-index: 2; }
+.grid .num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.grid td.cell { cursor: cell; user-select: none; min-width: 4.2rem; }
+.grid td.total { color: var(--accent); font-weight: 700; }
+/* The row totals are always the last column: keep them in view while scrolling across. */
+.grid tr > :last-child.total { position: sticky; right: 0; z-index: 1; background: var(--surface); box-shadow: -1px 0 0 var(--line); }
+.grid thead tr > :last-child.total { z-index: 3; background: var(--surface-2); }
+.grid tfoot tr > :last-child.total { z-index: 3; background: var(--surface-2); }
+.grid tr > :last-child.total.sel { background: #4a3e22; }
+.grid td.weekend, .grid th.weekend { background: rgba(255, 255, 255, 0.025); }
+.grid td.sel { background: rgba(240, 178, 62, 0.22); outline: 1px solid rgba(240, 178, 62, 0.6); outline-offset: -1px; }
+/* A cell holding something listed under Checks: a corner mark, as for a comment in a spreadsheet. */
+.grid td.flag { background-image: linear-gradient(225deg, var(--accent) 0 6px, transparent 6px); background-repeat: no-repeat; }
+.grid tbody th.unofficial .link::after { content: " (not on the list)"; color: var(--accent); font-size: 0.75rem; }
+.grid .link { background: none; border: 0; padding: 0; color: var(--ink); font: inherit; cursor: pointer; text-align: left; }
+.grid thead .link { color: var(--muted); font-weight: 600; }
+.grid .link:hover { color: var(--accent); text-decoration: underline; }
+.grid .row-tools { display: flex; align-items: center; gap: 0.5rem; }
+.grid .row-tools .link { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.grid .row-tools .check input { margin-top: 0; }
+.grid .copy-mini { padding: 0.1rem 0.45rem; font-size: 0.75rem; }
+.grid-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem 1rem; align-items: baseline; }
+.grid-sum { margin: 0.6rem 0 0; font-family: var(--mono); font-size: 0.85rem; color: var(--accent); white-space: pre; }
+.check-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.35rem 1rem; margin: 0.4rem 0 0.9rem; }

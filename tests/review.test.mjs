@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { atTime, normalise } from "../src/js/model.js";
 import {
+  isBillable, reviewGrid, setBilling,
   addHoursFile, addOfficialClient, addOfficialTask, blankReview, costingLabel, setTaskAlias, clientName, clientTSV, compile, daysBetween, decodeLists, detailCSV, encodeLists, handoffText,
   hoursFile, hoursFileName, normaliseLists, normaliseReview, parseHoursFile, parseList, phaseLabel, removePerson, setAlias,
   setReviewed, reviewedFor, tasksFor, totalsCSV, weekStart,
@@ -249,4 +250,65 @@ test("adding to the lists from a check clears it", () => {
   assert.deepEqual(r.lists.clients, ["Tradition Homes", "PLEXXIS"]);
   assert.deepEqual(r.lists.tasks.internal, ["Training", "Manuals Update"]);
   assert.equal(r.lists.updated, 7);
+});
+
+test("the review grid: clients by category, then people, then tasks by day or by person", () => {
+  const alex = person("Alex", [
+    ["Tradition Homes", "2026-10-26", "09:00", "11:00", "p2", "AR replication"],
+    ["Tradition Homes", "2026-10-27", "09:00", "10:00", "p2", "AR replication"],
+    ["Tradition Homes", "2026-10-27", "10:00", "10:30", "p1", "Customer import"],
+    ["Eubanks", "2026-10-28", "09:00", "12:00", "p2", "AR replication"],
+    ["PLEXXIS", "2026-10-28", "13:00", "14:00", "internal", "Manuals update"],
+  ]);
+  const sam = person("Sam", [["Tradition Homes", "2026-10-26", "13:00", "14:30", "p2", "GL mapping"]]);
+  let r = blankReview();
+  for (const st of [alex, sam]) r = addHoursFile(r, file(st, "2026-10-26", "2026-10-30"), 1);
+
+  // Billable only leaves out PLEXXIS and Internal by default.
+  assert.deepEqual(r.billing, { categories: ["internal"], clients: ["PLEXXIS"] });
+  const c = compile(r, "2026-10-26", "2026-10-30", { billableOnly: true });
+  assert.equal(c.hours, 8);
+  assert.equal(compile(r, "2026-10-26", "2026-10-30").hours, 9);
+
+  const top = reviewGrid(c, { level: "clients" });
+  assert.deepEqual(top.rowKeys, ["Eubanks", "Tradition Homes"]);
+  assert.deepEqual(top.colKeys, ["p1", "p2"]);
+  assert.equal(top.cell("Tradition Homes", "p2").value, 4.5);
+  assert.equal(top.cell("Eubanks", "p1"), null);
+  assert.deepEqual([top.rowTotal("Tradition Homes"), top.colTotal("p2"), top.total], [5, 7.5, 8]);
+
+  const client = reviewGrid(c, { level: "client", client: "Tradition Homes" });
+  assert.deepEqual([client.rowKeys, client.colKeys], [["Alex", "Sam"], ["p1", "p2"]]);
+  assert.equal(client.cell("Sam", "p2").value, 1.5);
+
+  const one = reviewGrid(c, { level: "person", client: "Tradition Homes", employee: "Alex" });
+  assert.deepEqual(one.colKeys, ["2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30"]); // every day, like a timesheet
+  assert.deepEqual(one.rowKeys, ["p1\u0000Customer import", "p2\u0000AR replication"]);
+  assert.equal(one.cell("p2\u0000AR replication", "2026-10-27").value, 1);
+  assert.equal(one.colTotal("2026-10-27"), 1.5);
+
+  const cat = reviewGrid(c, { level: "category", client: "Tradition Homes", category: "p2" });
+  assert.deepEqual([cat.rowKeys, cat.colKeys], [["AR replication", "GL mapping"], ["Alex", "Sam"]]);
+
+  // Tracked time instead of rounded hours.
+  assert.equal(reviewGrid(c, { level: "client", client: "Tradition Homes" }, { tracked: true }).cell("Alex", "p1").value, 0.5);
+});
+
+test("not billed: set per category and client, and kept across a save", () => {
+  let r = setBilling(blankReview(), "clients", "plexxis", true); // billed again, any casing
+  r = setBilling(r, "categories", "gaps", false);
+  assert.deepEqual(r.billing, { categories: ["internal", "gaps"], clients: [] });
+  assert.equal(isBillable(r.billing, { category: "gaps", client: "Acme" }), false);
+  assert.equal(isBillable(r.billing, { category: "p2", client: "PLEXXIS" }), true);
+  assert.deepEqual(normaliseReview(JSON.parse(JSON.stringify(r))).billing, r.billing);
+  assert.deepEqual(normaliseReview({}).billing, { categories: ["internal"], clients: ["PLEXXIS"] }); // older saved data
+});
+
+test("grid cells holding something under Checks are flagged", () => {
+  const alex = person("Alex", [["Unknown Co", "2026-10-26", "09:00", "10:00", "p2", "x"], ["Acme", "2026-10-26", "10:00", "11:00", "p2", "y"]]);
+  let r = addHoursFile(blankReview(), file(alex, "2026-10-26", "2026-10-30"), 1);
+  r.lists = normaliseLists({ clients: ["Acme"] });
+  const g = reviewGrid(compile(r, "2026-10-26", "2026-10-30"), { level: "clients" });
+  assert.equal(g.cell("Unknown Co", "p2").flagged, true);
+  assert.equal(g.cell("Acme", "p2").flagged, false);
 });

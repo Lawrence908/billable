@@ -65,19 +65,42 @@
     <ul class="checks" id="checks"></ul>
   </section>
 
-  <section class="panel">
+  <section class="panel" id="review-panel">
     <div class="panel-head">
-      <h2 class="section-h">Hours by client</h2>
+      <nav class="crumbs" id="crumbs" aria-label="Where you are in the review"></nav>
       <span class="fold-status" id="reviewed-badge"></span>
     </div>
-    <p class="empty" id="clients-empty">No hours in this period.</p>
-    <table class="summary review-table" id="clients-table" hidden>
-      <thead><tr><th>Client</th><th>People</th><th class="num">Hours</th><th>Reviewed</th><th class="copy-col"><span class="visually-hidden">Copy</span></th></tr></thead>
-      <tbody id="clients"></tbody>
-      <tfoot><tr><th colspan="2">Total</th><th class="num" id="clients-total">0.00</th><th colspan="2"></th></tr></tfoot>
-    </table>
-    <p class="note">Hours are each person's lines for each day, rounded to the nearest 0.25 h as they would paste them, then added up. A copy button copies that client's rows in the timesheet's five columns: Date, Employee, Costing section, Notes, Hours.</p>
+    <div class="filters">
+      <label class="check"><input type="checkbox" id="billable-only"> Billable only</label>
+      <label class="check"><input type="checkbox" id="unreviewed-only"> Not yet reviewed</label>
+      <input id="client-search" type="search" placeholder="Find a client" aria-label="Find a client" autocomplete="off">
+      <select id="value-mode" aria-label="Show">
+        <option value="hours">Rounded hours</option>
+        <option value="tracked">Tracked time</option>
+      </select>
+      <details class="people-filter" id="people-filter">
+        <summary class="btn btn-small" id="people-summary">Everyone</summary>
+        <div class="people-options" id="people-options"></div>
+      </details>
+    </div>
+    <p class="empty" id="grid-empty" hidden>No hours in this period.</p>
+    <div class="grid-wrap" id="grid-wrap">
+      <table class="grid" id="grid"></table>
+    </div>
+    <div class="grid-foot">
+      <p class="note" id="grid-hint"></p>
+      <p class="grid-sum" id="grid-sum" aria-live="polite"></p>
+    </div>
   </section>
+
+  <details class="panel fold" id="billing-wrap">
+    <summary class="section-h">Not billed <span class="fold-status" id="billing-badge"></span></summary>
+    <p class="note">Ticked time is internal or billed another way. With Billable only on, it is left out of the review, the totals and the hand-off. It is never deleted: turn Billable only off to see it.</p>
+    <p class="label">Categories</p>
+    <div class="check-grid" id="billing-categories"></div>
+    <p class="label">Clients</p>
+    <div class="check-grid" id="billing-clients"></div>
+  </details>
 
   <details class="panel fold" id="glance-wrap">
     <summary class="section-h">At a glance</summary>

@@ -71,10 +71,18 @@ app, and keeps the same promise: nothing leaves the browser.
   name, remembered for later files), tasks not on their category's own list, time
   with no category, weekdays a person's files do not cover, and files saved while a
   timer was running.
-- **Hours by client** adds up each person's rounded daily lines, the numbers they
-  would have pasted themselves, with a per-client copy in the timesheet's five
-  columns and a Reviewed tick per client per period. **At a glance** splits the
-  period by person and by category.
+- **The review grid** reads like a spreadsheet you drill into: clients by
+  category, then one client's people by category, then one person's tasks by
+  day (or, from a category heading, that category's tasks by person). A
+  breadcrumb and Esc go back up. Hours are each person's rounded daily lines
+  added up, the numbers they would have pasted themselves; a toggle shows tracked
+  time instead. Drag or shift-click across cells for Sum, Count and Average, and
+  Ctrl+C copies them for Excel. Cells holding something under Checks get a corner
+  mark. Each client has a Reviewed tick per period and a copy in the timesheet's
+  five columns. Filters: Billable only, Not yet reviewed, client search, people.
+- **Not billed** marks categories and clients that are internal or billed
+  another way (Internal and PLEXXIS to start). With Billable only on they are left
+  out of the grid, totals and hand-off, never deleted.
 - **Hand off**: email or copy a summary, or save every line or the totals as CSV.
 - The review data lives in that browser's storage, with export and import.
 

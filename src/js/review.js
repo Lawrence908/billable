@@ -7,7 +7,7 @@
 import { CATEGORIES, dayKey, fmtHours, shiftDay } from "./model.js";
 import {
   addHoursFile, addOfficialClient, addOfficialTask, clientTSV, compile, detailCSV, encodeLists, handoffText, normaliseLists, normaliseReview, parseHoursFile, parseList,
-  phaseLabel, removePerson, reviewedFor, setAlias, setReviewed, setTaskAlias, totalsCSV, weekStart,
+  phaseLabel, removePerson, reviewGrid, reviewedFor, setAlias, setBilling, setReviewed, setTaskAlias, totalsCSV, weekStart,
 } from "./review-model.js";
 import { copyText, download, el, guarded, renderQR, storage, toast } from "./ui.js";
 
@@ -83,16 +83,26 @@ async function addFiles(files) {
 
 /* ---------- rendering ---------- */
 
+// What the reviewer is looking at. Not saved: a reload starts at the top.
+const ui = { view: { level: "clients" }, search: "", unreviewedOnly: false, hidden: new Set(), sel: null };
+
+// Everything, for the files list and Checks; and what is billed, for the
+// review grid, the totals and the hand-off.
+const compiledAll = () => compile(review, review.period.from, review.period.to);
+const compiled = () => compile(review, review.period.from, review.period.to, { billableOnly: review.prefs.billableOnly });
+
 function render() {
   const { from, to } = review.period;
   $("period-from").value = from;
   $("period-to").value = to;
-  const c = compile(review, from, to);
-  $("period-label").textContent = `${fmtDay(from)} to ${fmtDay(to)}`;
+  const all = compiledAll();
+  const c = compiled();
+  $("period-label").textContent = `${fmtDay(from)} to ${fmtDay(to)}${review.prefs.billableOnly ? ", billable" : ""}`;
   $("period-total").textContent = fmtHours(c.hours);
-  renderPeople(c);
-  renderChecks(c);
-  renderClients(c);
+  renderPeople(all);
+  renderChecks(all);
+  renderReview(c);
+  renderBilling(all);
   renderGlance(c);
   if (document.activeElement !== $("ar-email")) $("ar-email").value = review.arEmail;
   $("lists-badge").textContent = review.lists.clients.length ? plural(review.lists.clients.length, "client", "clients") : "None yet";
@@ -182,38 +192,245 @@ function renderChecks(c) {
   $("checks").replaceChildren(...items);
 }
 
-function renderClients(c) {
+/* ---------- the review grid ---------- */
+
+const up = (v) => (v.level === "clients" ? null : v.level === "client" ? { level: "clients" } : { level: "client", client: v.client });
+const shortDay = (key) => {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
+};
+const isWeekend = (key) => {
+  const [y, m, d] = key.split("-").map(Number);
+  return [0, 6].includes(new Date(y, m - 1, d).getDay());
+};
+const lineLabel = (key) => {
+  const [category, note] = key.split("\u0000");
+  return `${category ? phaseLabel(review.lists, category) : "No category"}${note ? ` · ${note}` : ""}`;
+};
+
+function go(view) {
+  ui.view = view;
+  ui.sel = null;
+  render();
+  $("grid-wrap").scrollLeft = 0;
+}
+
+// The filters that only change what is shown: people, client search, reviewed.
+function visible(c) {
+  const ticks = reviewedFor(review, review.period.from, review.period.to);
+  const q = ui.search.trim().toLowerCase();
+  const rows = c.rows.filter((r) => !ui.hidden.has(r.employee)
+    && (ui.view.level !== "clients" || !q || r.client.toLowerCase().includes(q))
+    && (ui.view.level !== "clients" || !ui.unreviewedOnly || !ticks[r.client]));
+  return { ...c, rows };
+}
+
+function renderReview(c) {
   const { from, to } = review.period;
   const ticks = reviewedFor(review, from, to);
-  $("clients-table").hidden = !c.clients.length;
-  $("clients-empty").hidden = c.clients.length > 0;
   const done = c.clients.filter((x) => ticks[x.name]).length;
   $("reviewed-badge").textContent = c.clients.length ? `${done} of ${c.clients.length} reviewed` : "";
   $("reviewed-badge").className = `fold-status${c.clients.length && done === c.clients.length ? " good" : ""}`;
-  $("clients-total").textContent = fmtHours(c.hours);
-  const rows = [];
-  for (const client of c.clients) {
-    rows.push(el("tr", { class: `client-row detailed${client.official ? "" : " unofficial"}` },
-      el("td", { text: client.name }),
-      el("td", { class: "muted", text: client.people.join(", ") }),
-      el("td", { class: "num billable", text: fmtHours(client.hours) }),
-      el("td", {}, el("label", { class: "check" },
-        el("input", { type: "checkbox", checked: !!ticks[client.name], onchange: (e) => commit(setReviewed(review, from, to, client.name, e.target.checked)) }),
-        el("span", { class: "visually-hidden", text: `${client.name} reviewed` }))),
-      el("td", { class: "copy" }, el("button", {
-        type: "button", class: "btn btn-small", text: "Copy",
-        "aria-label": `Copy ${client.name}'s rows for the timesheet`,
-        onclick: () => copyText(clientTSV(c, client.name), `${client.name}'s rows`),
-      }))));
-    for (const l of client.lines) {
-      rows.push(el("tr", { class: "line-row" },
-        el("td", { class: l.otherTask || !l.category ? "warn" : "", text: l.label }),
-        el("td", { text: l.people.map((p) => `${p.employee} ${fmtHours(p.hours)}`).join(", ") }),
-        el("td", { class: "num", text: fmtHours(l.hours) }),
-        el("td", { colspan: "2" })));
-    }
+  $("billable-only").checked = review.prefs.billableOnly;
+  $("value-mode").value = review.prefs.tracked ? "tracked" : "hours";
+  $("unreviewed-only").checked = ui.unreviewedOnly;
+  if (document.activeElement !== $("client-search")) $("client-search").value = ui.search;
+  $("client-search").hidden = ui.view.level !== "clients";
+  $("unreviewed-only").closest("label").hidden = ui.view.level !== "clients";
+  renderPeopleFilter(c);
+
+  // A view whose client or person has no hours any more (a new period, say) falls back to the top.
+  const v = ui.view;
+  if ((v.client && !c.rows.some((r) => r.client === v.client))
+    || (v.employee && !c.rows.some((r) => r.client === v.client && r.employee === v.employee))) ui.view = { level: "clients" };
+
+  renderCrumbs();
+  const shown = visible(c);
+  const g = reviewGrid(shown, ui.view, { tracked: review.prefs.tracked });
+  $("grid-empty").hidden = g.rowKeys.length > 0;
+  $("grid-wrap").hidden = !g.rowKeys.length;
+  $("grid-hint").textContent = {
+    clients: "Click a client, or double-click a row, to see who worked on it. Drag across cells to add them up; Ctrl+C copies them for Excel.",
+    client: "Click a person to see their tasks by day, or a heading to see that category's tasks by person. Esc goes back up.",
+    person: "Each task by day, as this person tracked it. Esc goes back up.",
+    category: "Each task in this category, by person. Esc goes back up.",
+  }[ui.view.level];
+  renderGrid(g, ticks, shown);
+}
+
+function renderCrumbs() {
+  const v = ui.view;
+  const crumb = (text, view) => (view ? el("button", { type: "button", class: "crumb", text, onclick: () => go(view) }) : el("span", { class: "crumb here", text, "aria-current": "page" }));
+  const parts = [crumb("All clients", v.level === "clients" ? null : { level: "clients" })];
+  if (v.client) parts.push(crumb(v.client, v.level === "client" ? null : { level: "client", client: v.client }));
+  if (v.level === "person") parts.push(crumb(v.employee, null));
+  if (v.level === "category") parts.push(crumb(phaseLabel(review.lists, v.category), null));
+  $("crumbs").replaceChildren(...parts.flatMap((p, i) => (i ? [el("span", { class: "crumb-sep", text: "›", "aria-hidden": "true" }), p] : [p])));
+}
+
+function renderPeopleFilter(c) {
+  const names = [...new Set(c.rows.map((r) => r.employee))].sort((a, b) => a.localeCompare(b));
+  const shown = names.filter((n) => !ui.hidden.has(n)).length;
+  $("people-summary").textContent = shown === names.length ? "Everyone" : `${shown} of ${names.length} people`;
+  if ($("people-filter").contains(document.activeElement)) return;
+  $("people-options").replaceChildren(...names.map((n) => el("label", { class: "check" },
+    el("input", { type: "checkbox", checked: !ui.hidden.has(n), onchange: (e) => { if (e.target.checked) ui.hidden.delete(n); else ui.hidden.add(n); render(); } }),
+    el("span", { text: n }))));
+}
+
+// The grid as a matrix of values, so a selection can be added up or copied.
+let matrix = [];
+
+function renderGrid(g, ticks, c) {
+  const v = ui.view;
+  const fmt = (n) => (n ? fmtHours(n) : "");
+  const colLabel = (k) => (v.level === "person" ? shortDay(k) : v.level === "category" ? k : k ? phaseLabel(review.lists, k) : "No category");
+  const rowLabel = (k) => (v.level === "person" ? lineLabel(k) : v.level === "category" ? k || "No task" : k);
+  const drill = (rk) => (v.level === "clients" ? { level: "client", client: rk } : v.level === "client" ? { level: "person", client: v.client, employee: rk } : null);
+  const corner = { clients: "Reviewed · Client", client: "Person", person: "Task", category: "Task" }[v.level];
+  const level1 = v.level === "clients";
+
+  const head = el("tr", {}, el("th", { class: "corner", scope: "col", text: corner }),
+    ...g.colKeys.map((k) => {
+      const label = colLabel(k).replace(/\//g, "/\u200b"); // a heading may wrap after a slash
+      const cls = `num${v.level === "person" && isWeekend(k) ? " weekend" : ""}`;
+      if (v.level === "client") {
+        return el("th", { class: cls, scope: "col" }, el("button", { type: "button", class: "link", text: label, title: `${label}: tasks by person`, onclick: () => go({ level: "category", client: v.client, category: k }) }));
+      }
+      return el("th", { class: cls, scope: "col", text: label, title: v.level === "person" ? k : label });
+    }),
+    el("th", { class: "num total", scope: "col", text: "Total" }));
+
+  matrix = [];
+  const body = g.rowKeys.map((rk, r) => {
+    const values = [...g.colKeys.map((ck) => g.cell(rk, ck)?.value || 0), g.rowTotal(rk)];
+    matrix.push(values);
+    const target = drill(rk);
+    const name = target
+      ? el("button", { type: "button", class: "link", text: rowLabel(rk), onclick: () => go(target) })
+      : el("span", { text: rowLabel(rk) });
+    const unofficial = level1 && !c.rows.find((x) => x.client === rk)?.officialClient;
+    // On the top level the row heading also holds the Reviewed tick and the
+    // copy button, so they stay in view however far the grid scrolls.
+    const header = level1
+      ? el("th", { scope: "row", class: unofficial ? "unofficial" : "" }, el("div", { class: "row-tools" },
+        el("label", { class: "check", title: "Reviewed" },
+          el("input", { type: "checkbox", checked: !!ticks[rk], onchange: (e) => commit(setReviewed(review, review.period.from, review.period.to, rk, e.target.checked)) }),
+          el("span", { class: "visually-hidden", text: `${rk} reviewed` })),
+        name,
+        el("button", {
+          type: "button", class: "btn btn-small copy-mini", text: "Copy", "aria-label": `Copy ${rk}'s rows for the timesheet`,
+          onclick: () => copyText(clientTSV(c, rk), `${rk}'s rows`),
+        })))
+      : el("th", { scope: "row" }, name);
+    return el("tr", {},
+      header,
+      ...g.colKeys.map((ck, i) => {
+        const cell = g.cell(rk, ck);
+        return el("td", {
+          class: `num cell${cell?.flagged ? " flag" : ""}${v.level === "person" && isWeekend(ck) ? " weekend" : ""}`,
+          "data-r": r, "data-c": i, title: cell?.flagged ? "Includes something listed under Checks" : null, text: fmt(cell?.value),
+        });
+      }),
+      el("td", { class: "num cell total", "data-r": r, "data-c": g.colKeys.length, text: fmt(g.rowTotal(rk)) }));
+  });
+
+  const totals = [...g.colKeys.map((ck) => g.colTotal(ck)), g.total];
+  matrix.push(totals);
+  const r = g.rowKeys.length;
+  const foot = el("tr", {}, el("th", { scope: "row", text: "Total" }),
+    ...totals.map((t, i) => el("td", { class: "num cell total", "data-r": r, "data-c": i, text: fmt(t) })));
+
+  $("grid").replaceChildren(el("thead", {}, head), el("tbody", {}, ...body), el("tfoot", {}, foot));
+  paintSelection();
+}
+
+/* ---------- selecting cells, as in a spreadsheet ---------- */
+
+let dragging = false;
+const cellAt = (t) => t?.closest?.("td.cell");
+const pos = (td) => ({ r: Number(td.dataset.r), c: Number(td.dataset.c) });
+
+function selected() {
+  if (!ui.sel) return [];
+  const { a, b } = ui.sel;
+  const out = [];
+  for (let r = Math.min(a.r, b.r); r <= Math.max(a.r, b.r); r++) {
+    const row = [];
+    for (let c = Math.min(a.c, b.c); c <= Math.max(a.c, b.c); c++) row.push(matrix[r]?.[c] ?? 0);
+    out.push(row);
   }
-  $("clients").replaceChildren(...rows);
+  return out;
+}
+
+function paintSelection() {
+  const s = ui.sel;
+  for (const td of $("grid").querySelectorAll("td.cell")) {
+    const { r, c } = pos(td);
+    td.classList.toggle("sel", !!s && r >= Math.min(s.a.r, s.b.r) && r <= Math.max(s.a.r, s.b.r) && c >= Math.min(s.a.c, s.b.c) && c <= Math.max(s.a.c, s.b.c));
+  }
+  const values = selected().flat().filter((n) => n);
+  $("grid-sum").textContent = values.length
+    ? `Sum ${fmtHours(values.reduce((x, y) => x + y, 0))}   Count ${values.length}   Average ${fmtHours(values.reduce((x, y) => x + y, 0) / values.length)}`
+    : "";
+}
+
+const grid = $("grid");
+grid.addEventListener("mousedown", (e) => {
+  const td = cellAt(e.target);
+  if (!td || e.button !== 0) return;
+  e.preventDefault(); // no text selection while dragging
+  const p = pos(td);
+  ui.sel = e.shiftKey && ui.sel ? { a: ui.sel.a, b: p } : { a: p, b: p };
+  dragging = true;
+  paintSelection();
+});
+grid.addEventListener("mouseover", (e) => {
+  const td = cellAt(e.target);
+  if (!dragging || !td) return;
+  ui.sel = { a: ui.sel.a, b: pos(td) };
+  paintSelection();
+});
+document.addEventListener("mouseup", () => { dragging = false; });
+grid.addEventListener("dblclick", (e) => {
+  const td = cellAt(e.target);
+  if (!td || td.closest("tfoot")) return;
+  const row = td.closest("tr").querySelector("th button.link");
+  row?.click();
+});
+
+const typingHere = () => document.activeElement?.matches("input, textarea, select");
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || typingHere()) return;
+  if (ui.sel) {
+    ui.sel = null;
+    paintSelection();
+  } else if (up(ui.view)) go(up(ui.view));
+});
+// Ctrl+C with cells selected copies them, tab-separated, for Excel or Sheets.
+document.addEventListener("copy", (e) => {
+  if (!ui.sel || typingHere() || String(document.getSelection())) return;
+  e.preventDefault();
+  e.clipboardData.setData("text/plain", selected().map((row) => row.map((n) => (n ? fmtHours(n) : "")).join("\t")).join("\n"));
+  toast("Cells copied.");
+});
+
+/* ---------- not billed ---------- */
+
+function renderBilling(all) {
+  const { billing } = review;
+  const box = (label, kind, name) => el("label", { class: "check" },
+    el("input", { type: "checkbox", checked: kind === "categories" ? billing.categories.includes(name) : billing.clients.some((x) => x.toLowerCase() === name.toLowerCase()),
+      onchange: (e) => commit(setBilling(review, kind, name, !e.target.checked)) }),
+    el("span", { text: label }));
+  $("billing-categories").replaceChildren(
+    ...CATEGORIES.map((c) => box(phaseLabel(review.lists, c.key), "categories", c.key)),
+    box("No category", "categories", ""));
+  const seen = new Map();
+  for (const n of [...review.lists.clients, ...all.clients.map((x) => x.name), ...billing.clients]) if (!seen.has(n.toLowerCase())) seen.set(n.toLowerCase(), n);
+  $("billing-clients").replaceChildren(...[...seen.values()].sort((a, b) => a.localeCompare(b)).map((n) => box(n, "clients", n)));
+  const count = billing.categories.length + billing.clients.length;
+  $("billing-badge").textContent = count ? `${count} not billed` : "Everything billed";
 }
 
 function renderGlance(c) {
@@ -292,8 +509,13 @@ drop.addEventListener("drop", guarded(async (e) => {
   if (files.length) await addFiles(files);
 }));
 
+$("billable-only").addEventListener("change", (e) => { ui.sel = null; commit({ ...review, prefs: { ...review.prefs, billableOnly: e.target.checked } }); });
+$("value-mode").addEventListener("change", (e) => { ui.sel = null; commit({ ...review, prefs: { ...review.prefs, tracked: e.target.value === "tracked" } }); });
+$("unreviewed-only").addEventListener("change", (e) => { ui.unreviewedOnly = e.target.checked; ui.sel = null; render(); });
+$("client-search").addEventListener("input", (e) => { ui.search = e.target.value; ui.sel = null; render(); });
+
 $("ar-email").addEventListener("change", (e) => commit({ ...review, arEmail: e.target.value.trim().slice(0, 200) }));
-const summary = () => handoffText(compile(review, review.period.from, review.period.to), review.lists);
+const summary = () => handoffText(compiled(), review.lists);
 $("email-btn").addEventListener("click", () => {
   const to = review.arEmail.split(/[,;\s]+/).filter(Boolean).map(encodeURIComponent).join(",");
   const subject = encodeURIComponent(`Billable hours ${review.period.from} to ${review.period.to}`);
@@ -302,9 +524,9 @@ $("email-btn").addEventListener("click", () => {
 $("copy-summary").addEventListener("click", () => copyText(summary(), "Summary"));
 const period = () => `${review.period.from}-to-${review.period.to}`;
 $("detail-csv").addEventListener("click", () =>
-  download(`billable-lines-${period()}.csv`, detailCSV(compile(review, review.period.from, review.period.to)), "text/csv"));
+  download(`billable-lines-${period()}.csv`, detailCSV(compiled()), "text/csv"));
 $("totals-csv").addEventListener("click", () =>
-  download(`billable-totals-${period()}.csv`, totalsCSV(compile(review, review.period.from, review.period.to)), "text/csv"));
+  download(`billable-totals-${period()}.csv`, totalsCSV(compiled()), "text/csv"));
 
 $("lists-save").addEventListener("click", () => {
   saveLists();

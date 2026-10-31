@@ -92,7 +92,7 @@ export function parseHoursFile(raw) {
 /* ---------- the reviewer's store ---------- */
 
 export function blankReview() {
-  return { lists: blankLists(), people: {}, aliases: {}, taskAliases: {}, reviewed: {}, period: null, arEmail: "" };
+  return { lists: blankLists(), people: {}, aliases: {}, taskAliases: {}, reviewed: {}, period: null, arEmail: "", billing: blankBilling(), prefs: blankPrefs() };
 }
 
 // Adds one person's file. Their lines inside the file's dates are replaced, so
@@ -144,6 +144,13 @@ export function normaliseReview(r) {
   }
   if (r.period && isDay(r.period.from) && isDay(r.period.to)) out.period = { from: r.period.from, to: r.period.to };
   out.arEmail = text(r.arEmail, 200);
+  if (r.billing && typeof r.billing === "object") {
+    out.billing = {
+      categories: (Array.isArray(r.billing.categories) ? r.billing.categories : []).filter((k) => CATEGORY_KEYS.has(k) || k === ""),
+      clients: uniqueNames(r.billing.clients),
+    };
+  }
+  if (r.prefs && typeof r.prefs === "object") out.prefs = { billableOnly: r.prefs.billableOnly !== false, tracked: !!r.prefs.tracked };
   return out;
 }
 
@@ -276,6 +283,26 @@ export function clientName(review, name) {
   return officialClient(review.lists, name) || name;
 }
 
+/* ---------- billable time ---------- */
+
+// Time that is not billed to clients, kept out of the review when "Billable
+// only" is on. Categories by key ("" is time with no category), clients by
+// their reported name. Starts with Internal and PLEXXIS; the reviewer sets it.
+export function blankBilling() {
+  return { categories: ["internal"], clients: ["PLEXXIS"] };
+}
+export const blankPrefs = () => ({ billableOnly: true, tracked: false });
+
+export const isBillable = (billing, row) =>
+  !billing.categories.includes(row.category) && !billing.clients.some((c) => c.toLowerCase() === row.client.toLowerCase());
+
+export function setBilling(review, kind, name, billed) {
+  const list = review.billing[kind].filter((x) => x.toLowerCase() !== name.toLowerCase());
+  return { ...review, billing: { ...review.billing, [kind]: billed ? list : [...list, name] } };
+}
+
+export const compareCategories = (a, b) => categorySort(a) - categorySort(b);
+
 const categorySort = (key) => {
   const i = CATEGORIES.findIndex((c) => c.key === key);
   return i < 0 ? CATEGORIES.length : i;
@@ -284,7 +311,9 @@ const categorySort = (key) => {
 // Everything the review screen and the hand-off need for one period.
 // Hours are each person's rounded daily lines, added up: the same numbers
 // each of them would have pasted into the Sheet themselves.
-export function compile(review, from, to) {
+// With `billableOnly`, time the reviewer marked as not billed is left out of
+// everything, totals and hand-off included.
+export function compile(review, from, to, { billableOnly = false } = {}) {
   const { lists } = review;
   const officialSet = new Set(lists.clients.map((c) => c.toLowerCase()));
   const checkClients = lists.clients.length > 0;
@@ -311,6 +340,7 @@ export function compile(review, from, to) {
       });
     }
   }
+  if (billableOnly) rows.splice(0, rows.length, ...rows.filter((r) => isBillable(review.billing, r)));
   rows.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0) || a.employee.localeCompare(b.employee) || a.client.localeCompare(b.client));
 
   // By client, then by category and task.
@@ -431,4 +461,72 @@ export function handoffText(compiled, lists) {
   lines.push("", `Total: ${fmtHours(compiled.hours)} h from ${compiled.people.filter((p) => p.hours).length} people.`,
     "Each person's line for each day is rounded to the nearest 0.25 h, then added up.");
   return lines.join("\n");
+}
+
+/* ---------- the review grid ---------- */
+
+// A line still needing attention: a client or task not on the lists, or no category.
+export const needsCheck = (r) => !r.officialClient || r.otherTask || !r.category;
+
+// A spreadsheet of `rows`: one row per rowOf(r), one column per colOf(r),
+// each cell the sum of valueOf(r), with totals both ways. `cols` fixes the
+// columns (the days of a period, say) instead of taking those with data.
+export function pivot(rows, { rowOf, colOf, valueOf = (r) => r.hours, sortRows, sortCols, cols }) {
+  const cells = new Map();
+  const rowTotals = new Map();
+  const colTotals = new Map();
+  let total = 0;
+  for (const r of rows) {
+    const rk = rowOf(r);
+    const ck = colOf(r);
+    const v = valueOf(r);
+    if (!cells.has(rk)) cells.set(rk, new Map());
+    const cell = cells.get(rk).get(ck) || { value: 0, flagged: false };
+    cell.value += v;
+    cell.flagged ||= needsCheck(r);
+    cells.get(rk).set(ck, cell);
+    rowTotals.set(rk, (rowTotals.get(rk) || 0) + v);
+    colTotals.set(ck, (colTotals.get(ck) || 0) + v);
+    total += v;
+  }
+  const rowKeys = [...cells.keys()].sort(sortRows);
+  const colKeys = cols || [...colTotals.keys()].sort(sortCols);
+  return {
+    rowKeys,
+    colKeys,
+    cell: (rk, ck) => cells.get(rk)?.get(ck) || null,
+    rowTotal: (rk) => rowTotals.get(rk) || 0,
+    colTotal: (ck) => colTotals.get(ck) || 0,
+    total,
+  };
+}
+
+// The four views the review drills through. `view` is one of
+//   { level: "clients" }                         clients by category
+//   { level: "client", client }                  that client's people by category
+//   { level: "person", client, employee }        their tasks by day
+//   { level: "category", client, category }      that category's tasks by person
+export function reviewGrid(compiled, view, { tracked = false } = {}) {
+  const valueOf = tracked ? (r) => r.ms / HOUR : (r) => r.hours;
+  const byName = (a, b) => a.localeCompare(b);
+  const lineOf = (r) => `${r.category}\u0000${r.note}`;
+  const { rows } = compiled;
+  switch (view.level) {
+    case "client":
+      return pivot(rows.filter((r) => r.client === view.client), { rowOf: (r) => r.employee, colOf: (r) => r.category, valueOf, sortRows: byName, sortCols: compareCategories });
+    case "person": {
+      const mine = rows.filter((r) => r.client === view.client && r.employee === view.employee);
+      const days = daysBetween(compiled.from, compiled.to);
+      return pivot(mine, {
+        rowOf: lineOf, colOf: (r) => r.date, valueOf,
+        sortRows: (a, b) => compareCategories(a.split("\u0000")[0], b.split("\u0000")[0]) || a.localeCompare(b),
+        // Every day of a period up to a month, so it reads like a timesheet; longer, only days with hours.
+        cols: days.length <= 31 ? days : [...new Set(mine.map((r) => r.date))].sort(),
+      });
+    }
+    case "category":
+      return pivot(rows.filter((r) => r.client === view.client && r.category === view.category), { rowOf: (r) => r.note, colOf: (r) => r.employee, valueOf, sortRows: byName, sortCols: byName });
+    default:
+      return pivot(rows, { rowOf: (r) => r.client, colOf: (r) => r.category, valueOf, sortRows: byName, sortCols: compareCategories });
+  }
 }

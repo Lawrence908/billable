@@ -125,17 +125,60 @@ check("an unofficial client is flagged", checks.some((c) => /"Coastal Interiors"
 check("a task outside the list is flagged", checks.some((c) => /P2 · Data conversion: "Brand new task" isn't on the task list/.test(c)));
 
 await rev.p.selectOption("#checks select", "Coastal Interiors Ltd.");
-const clients = await rev.p.$$eval("#clients tr.client-row", (rows) => rows.map((r) => `${r.cells[0].textContent}=${r.cells[2].textContent}`));
+const gridRows = () => rev.p.$$eval("#grid tbody tr", (rows) => rows.map((r) => `${(r.querySelector("th .link") || r.querySelector("th")).textContent}=${r.querySelector("td.total").textContent}`));
+const clients = await gridRows();
 check("mapping the name folds its hours into the official client", clients.join(",") === "Coastal Interiors Ltd.=2.50,Summit Drywall=2.25", clients.join(","));
 check("the mapping can be undone from Checks", (await rev.p.$$eval("#checks li", (l) => l.map((x) => x.textContent))).some((c) => /Counting "coastal interiors" as Coastal Interiors Ltd\./.test(c)));
 
-await rev.p.click('#clients tr.client-row:has-text("Summit Drywall") button');
+await rev.p.click('#grid tbody tr:has-text("Summit Drywall") button:has-text("Copy")');
 await rev.p.waitForTimeout(150);
 check("a client's rows copy in the timesheet's five columns, with the official Costing section name", (await clipboard(rev.p)) ===
   `10/19/2026\tSam Lee\tData conversion\tGL mapping\t2.00\n10/21/2026\tAlex Doe\tProject Management\tMeeting\t0.25`, JSON.stringify(await clipboard(rev.p)));
 
-await rev.p.check('#clients tr.client-row:has-text("Summit Drywall") input[type="checkbox"]');
+await rev.p.check('#grid tbody tr:has-text("Summit Drywall") input[type="checkbox"]');
 check("reviewed ticks are counted", (await rev.p.textContent("#reviewed-badge")) === "1 of 2 reviewed");
+
+// The grid: clients by category, with totals both ways.
+const heads = await rev.p.$$eval("#grid thead th", (t) => t.map((x) => x.textContent));
+check("the top level is clients by category", heads.slice(0, 4).join("|") === "Reviewed · Client|P2 · Data conversion|Project Management|Total", heads.join("|"));
+check("the grid totals both ways", (await rev.p.locator("#grid tfoot td.total").last().textContent()) === "4.75");
+
+// Select cells as in a spreadsheet: the sum shows in the corner, and Ctrl+C copies them.
+await rev.p.click('#grid td[data-r="0"][data-c="0"]');
+await rev.p.click('#grid td[data-r="1"][data-c="1"]', { modifiers: ["Shift"] });
+check("selected cells are added up", /^Sum 4\.75\s+Count 3\s+Average 1\.58$/.test(await rev.p.textContent("#grid-sum")), await rev.p.textContent("#grid-sum"));
+await rev.p.keyboard.press("Control+C");
+await rev.p.waitForTimeout(150);
+check("Ctrl+C copies the selected cells for Excel", (await clipboard(rev.p)) === "2.50\t\n2.00\t0.25", JSON.stringify(await clipboard(rev.p)));
+await rev.p.mouse.move(5, 5);
+await rev.p.mouse.down();
+await rev.p.mouse.up();
+await rev.p.keyboard.press("Escape"); // clears the selection
+
+// Drill down: a client, then a person, and back up with Esc.
+await rev.p.click('#grid tbody th button:has-text("Summit Drywall")');
+const crumbs = () => rev.p.textContent("#crumbs");
+check("clicking a client shows who worked on it", (await crumbs()) === "All clients›Summit Drywall"
+  && (await gridRows()).join(",") === "Alex Doe=0.25,Sam Lee=2.00", `${await crumbs()} ${await gridRows()}`);
+await rev.p.dblclick('#grid tbody tr:has-text("Sam Lee") td.cell >> nth=0');
+const dayHeads = await rev.p.$$eval("#grid thead th", (t) => t.map((x) => x.textContent));
+check("double-clicking a person shows their tasks by day", (await crumbs()) === "All clients›Summit Drywall›Sam Lee"
+  && dayHeads.length === 7 && (await gridRows()).join(",") === "P2 · Data conversion · GL mapping=2.00", `${dayHeads.join("|")} ${await gridRows()}`);
+await rev.p.keyboard.press("Escape");
+await rev.p.click('#grid thead button:has-text("P2 · Data conversion")');
+check("a category heading shows its tasks by person", (await crumbs()) === "All clients›Summit Drywall›P2 · Data conversion" && (await gridRows()).join(",") === "GL mapping=2.00");
+await rev.p.keyboard.press("Escape");
+await rev.p.keyboard.press("Escape");
+check("Esc goes back up to all clients", (await crumbs()) === "All clients");
+
+// Billable only: Project Management marked as not billed drops out of the review and totals.
+await rev.p.click("#billing-wrap > summary");
+await rev.p.check('#billing-categories label:has-text("Project Management") input');
+check("time marked as not billed leaves the review", (await rev.p.textContent("#period-total")) === "4.50" && !(await gridRows()).join().includes("0.25"));
+await rev.p.uncheck("#billable-only");
+check("turning Billable only off shows it again", (await rev.p.textContent("#period-total")) === "4.75");
+await rev.p.uncheck('#billing-categories label:has-text("Project Management") input');
+await rev.p.check("#billable-only");
 
 const [csv] = await Promise.all([rev.p.waitForEvent("download"), rev.p.click("#detail-csv")]);
 const lines = readFileSync(await csv.path(), "utf8").trim().split("\r\n");
