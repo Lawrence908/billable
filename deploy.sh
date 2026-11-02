@@ -6,6 +6,10 @@
 #   ./deploy.sh                    # default: no sync. No API container, and the
 #                                  # page may make no network requests at all.
 #   ENABLE_SYNC=true ./deploy.sh   # with end-to-end encrypted sync
+#   DEMO=true ./deploy.sh          # also builds the public demo site. Once it
+#                                  # exists, every deploy rebuilds it, so it
+#                                  # keeps in step. Its feedback link is
+#                                  # DEMO_FEEDBACK_URL, kept in .env.
 set -Eeuo pipefail
 cd "$(dirname "$0")"
 export ENABLE_SYNC="${ENABLE_SYNC:-false}"
@@ -20,4 +24,9 @@ else
   docker compose rm --stop --force billable-api >/dev/null 2>&1 || true
   docker compose up -d --build
 fi
-echo "deployed billable @ $BUILD_TIME (sync: $ENABLE_SYNC)"
+demo=false
+if [ "${DEMO:-false}" = "true" ] || docker container inspect billable-demo >/dev/null 2>&1; then
+  demo=true
+  docker compose --profile demo up -d --build billable-demo
+fi
+echo "deployed billable @ $BUILD_TIME (sync: $ENABLE_SYNC, demo: $demo)"

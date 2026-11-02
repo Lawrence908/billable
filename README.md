@@ -86,6 +86,38 @@ app, and keeps the same promise: nothing leaves the browser.
 - **Hand off**: email or copy a summary, or save every line or the totals as CSV.
 - The review data lives in that browser's storage, with export and import.
 
+## Public demo (`DEMO=true`)
+
+A copy of the app for showing people, with weeks of made-up hours already in it.
+It runs as its own container on its own subdomain, so its browser storage can never
+meet anyone's real hours.
+
+- **The app** opens as Alex Demo, an implementation consultant at an invented
+  software company, with three weeks of history and today's morning filled in up to a
+  few minutes ago. No timer is running, so Start is the first thing to try.
+- **`/review.html`** opens on last week with five people's hours files loaded, and a
+  few mistakes planted for Checks to find: a misspelt client, a task not on the list,
+  untagged time, a missing Friday, and a file saved with a timer running.
+- **The data is made relative to the day it is first opened**, and a visitor keeps
+  their copy, changes included, for a week, so a review can be finished another day.
+  After that it is made fresh, so it never looks stale. The banner's **Reset demo**
+  starts over on demand.
+- **Feedback** goes to the address in `DEMO_FEEDBACK_URL` (an https link, kept in
+  `.env`). Without one, the banner has no feedback button.
+- **A link preview** (`og-image.png`, from `tools/build-og-image.mjs`) for posts and
+  messages.
+- **Visit counts** go to self-hosted Umami, through Caddy's `umami` snippet on the
+  site's own address: pages, referrers, and clicks on Start, Stop, Reset demo and Give
+  feedback, by name only. No cookies, and it respects Do Not Track.
+
+So the demo's promise is narrower than the app's: **what you enter never leaves the
+browser**, and its Content Security Policy is `connect-src 'self'` rather than `'none'`.
+Its privacy text says so. The real build has no analytics and keeps `connect-src 'none'`.
+
+The real build deletes `demo.js`, `demo-ui.js`, the banner and the tracker tag, so it
+carries none of this. `DEMO=true ./deploy.sh` builds the demo once. After that, every deploy rebuilds
+it, so it keeps in step with the app.
+
 ## Privacy model
 
 The default build makes one promise, and the browser enforces it: **after the page
@@ -211,6 +243,8 @@ src/js/review-model.js      hours files, official lists, compiling    (pure)
 src/js/app.js               storage, rendering and event wiring
 src/js/ui.js                DOM helpers shared by both pages
 src/review.html, review.js  the review page
+src/js/demo.js              the public demo's made-up hours            (pure)
+src/js/demo-ui.js           seeds the demo and wires its banner; demo builds only
 src/js/sync-ui.js           sync UI, loaded only by sync builds       ┐
 src/js/sync.js              pull, merge, push; timeouts; 409 retry    │ removed from
 src/js/crypto.js            key derivation, encryption                │ builds without
@@ -243,6 +277,7 @@ network that only the front container joins. If you are not behind Cloudflare, s
 npm test                                            # unit tests, about two seconds
 node tests/e2e/two-devices.mjs http://localhost:8175   # needs: npm i --no-save playwright
 node tests/e2e/review.mjs http://localhost:8175        # the review flow, end to end
+node tests/e2e/demo.mjs http://localhost:8187 http://localhost:8175   # the demo, and none of it in the real build
 ```
 
 - **Unit tests** cover:

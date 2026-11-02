@@ -11,7 +11,8 @@
 //
 // Each deploy stamps a new version below, which installs a fresh copy and
 // deletes the previous one. Lines marked "sync-only" are removed by builds
-// without sync, along with the files they name.
+// without sync, and "demo-only" ones by builds that are not the public demo,
+// along with the files they name.
 
 const VERSION = "__BUILD_ID__";
 const SHELL = [
@@ -24,6 +25,8 @@ const SHELL = [
   "/js/transfer.js?v=__BUILD_ID__",
   "/js/review-model.js?v=__BUILD_ID__",
   "/js/ui.js?v=__BUILD_ID__",
+  "/js/demo.js?v=__BUILD_ID__", // demo-only
+  "/js/demo-ui.js?v=__BUILD_ID__", // demo-only
   "/js/sync-ui.js?v=__BUILD_ID__", // sync-only
   "/js/sync.js?v=__BUILD_ID__", // sync-only
   "/js/crypto.js?v=__BUILD_ID__", // sync-only

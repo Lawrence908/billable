@@ -38,6 +38,42 @@ services:
       retries: 3
       start_period: 10s
 
+  # The public demo: the same app with made-up hours, on its own site so its
+  # storage never meets real data. Never built with sync. Only runs with the
+  # "demo" profile (DEMO=true ./deploy.sh).
+  billable-demo:
+    profiles: ["demo"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+        BUILD_ID: ${BUILD_ID:-0}
+        ENABLE_SYNC: "false"
+        DEMO: "true"
+        DEMO_FEEDBACK_URL: ${DEMO_FEEDBACK_URL:-}
+    image: billable-demo:latest
+    container_name: billable-demo
+    restart: unless-stopped
+    networks:
+      - web
+    ports:
+      - "8187:80"
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   # Encrypted sync mailboxes. Only runs with ENABLE_SYNC=true (the "sync"
   # profile; deploy.sh selects it). No host port and not on the shared
   # network: reachable only through the front container's /api/ prefix.

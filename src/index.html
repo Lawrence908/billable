@@ -20,8 +20,32 @@
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/app.css?v=__BUILD_ID__">
 <link rel="stylesheet" href="/shared-footer/footer.css">
+<!-- demo:start -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Billable">
+<meta property="og:title" content="Billable: try the hours tracker">
+<meta property="og:description" content="Start and stop a timer per client, then get the day rounded to the quarter hour. A demo with made-up hours, ready to try.">
+<meta property="og:image" content="https://billable-demo.chrislawrence.ca/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<!-- Umami, served first-party by Caddy's umami snippet; cookieless, honours Do Not Track.
+     The hash is left out because transfer and lists links carry their data there. -->
+<script defer src="/a/s.js" data-website-id="ae99c377-579a-4e68-bf5d-9a82688e7bb7" data-host-url="/a" data-do-not-track="true" data-exclude-hash="true"></script>
+<!-- demo:end -->
 </head>
 <body>
+<!-- demo:start -->
+<div class="demo-bar">
+  <div class="wrap demo-row">
+    <p><strong>Demo</strong> with made-up hours for Alex, a software implementation consultant. Press Start on any client to try it, or <a href="/review.html">see the reviewer's side</a>. Nothing you enter leaves your browser.</p>
+    <div class="demo-actions">
+      <a class="btn btn-primary btn-small" id="demo-feedback" data-umami-event="feedback-click" href="__FEEDBACK_URL__" target="_blank" rel="noopener">Give feedback</a>
+      <button type="button" class="btn btn-small" id="demo-reset" data-umami-event="demo-reset">Reset demo</button>
+    </div>
+  </div>
+</div>
+<!-- demo:end -->
 <header class="masthead">
   <div class="wrap masthead-row">
     <div>
@@ -249,12 +273,23 @@
   <details class="privacy">
     <summary>
       <span class="privacy-head"><svg class="lock" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="7" width="10" height="7.5" rx="1.5" fill="currentColor"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>Private by design.</span>
+      <!-- nodemo:start -->
       Everything you enter is stored only in this browser, on this device. After the page loads, Billable makes no network requests, and your browser enforces that. No account, no ads, no analytics.
+      <!-- nodemo:end -->
+      <!-- demo:start -->
+      What you enter is stored only in this browser, on this device, and is never sent anywhere. This demo site does count visits, with self-hosted analytics. The real Billable has none. No account, no ads.
+      <!-- demo:end -->
       <span class="privacy-more">How?</span>
     </summary>
     <ul>
       <li><strong>Stored only in this browser.</strong> Your clients and hours are saved in this browser's local storage. They are not encrypted on the device, so anyone using this browser profile could see them, as with other saved site data. Clearing site data erases them, so export a backup now and then.</li>
+      <!-- nodemo:start -->
       <li><strong>Nothing is sent anywhere.</strong> Billable has no server to send your data to. Its Content Security Policy tells your browser to refuse every connection the page might try to make, and to load no outside scripts, fonts or images. You can check this yourself in your browser's developer tools, on the Network tab.</li>
+      <!-- nodemo:end -->
+      <!-- demo:start -->
+      <li><strong>What you enter is never sent.</strong> The demo's Content Security Policy lets the page connect only to this site, and load no outside scripts, fonts or images. Its one connection is visit counting, below.</li>
+      <li><strong>This demo counts visits</strong> with Umami, which runs on this site's own server: pages opened, where the link came from, browser, screen size, rough location, and clicks on Start, Stop, Reset demo and Give feedback, as names only. It uses no cookies, stores no IP addresses, and respects Do Not Track. The real Billable has no analytics and may open no connections at all.</li>
+      <!-- demo:end -->
       <li><strong>Works offline.</strong> A service worker keeps a copy of the app's own files from this site, so it opens without a connection. It stores none of your data.</li>
       <li><strong>Only you move data out.</strong> CSV and backup files are made by your browser and saved to your device. Copy puts text on your clipboard. Email opens your mail app with the summary filled in, and nothing goes anywhere unless you send it from there. A transfer QR code or link carries data inside the link itself, read by the device that opens it.</li>
       <li><strong>Loading the page is an ordinary visit.</strong> Cloudflare, which carries the traffic, sees what any website's network sees: your IP address, browser type and the time. Billable's own server does not record IP addresses, and never receives your clients or hours.</li>
@@ -293,6 +328,9 @@
 <div id="note-lists" hidden></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script src="/vendor/qrcode-2.0.4.js?v=__BUILD_ID__" defer></script>
+<!-- demo:start -->
+<script type="module" src="/js/demo-ui.js?v=__BUILD_ID__"></script>
+<!-- demo:end -->
 <script type="module" src="/js/app.js?v=__BUILD_ID__"></script>
 </body>
 </html>

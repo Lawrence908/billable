@@ -12,8 +12,32 @@
 <link rel="icon" href="/favicon.ico" sizes="32x32">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/app.css?v=__BUILD_ID__">
+<!-- demo:start -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Billable">
+<meta property="og:title" content="Billable: try the reviewer's side">
+<meta property="og:description" content="Compile a team's hours, fix the mistakes, and hand off to billing. A demo with five people's made-up hours.">
+<meta property="og:image" content="https://billable-demo.chrislawrence.ca/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<!-- Umami, served first-party by Caddy's umami snippet; cookieless, honours Do Not Track.
+     The hash is left out because transfer and lists links carry their data there. -->
+<script defer src="/a/s.js" data-website-id="ae99c377-579a-4e68-bf5d-9a82688e7bb7" data-host-url="/a" data-do-not-track="true" data-exclude-hash="true"></script>
+<!-- demo:end -->
 </head>
 <body class="review">
+<!-- demo:start -->
+<div class="demo-bar">
+  <div class="wrap wide demo-row">
+    <p><strong>Demo</strong> of the reviewer's side: five people's made-up hours, with last week open. Checks lists a few planted mistakes to fix. <a href="/">Back to Alex's timers</a>.</p>
+    <div class="demo-actions">
+      <a class="btn btn-primary btn-small" id="demo-feedback" data-umami-event="feedback-click" href="__FEEDBACK_URL__" target="_blank" rel="noopener">Give feedback</a>
+      <button type="button" class="btn btn-small" id="demo-reset" data-umami-event="demo-reset">Reset demo</button>
+    </div>
+  </div>
+</div>
+<!-- demo:end -->
 <header class="masthead">
   <div class="wrap wide masthead-row">
     <div>
@@ -171,6 +195,9 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script src="/vendor/qrcode-2.0.4.js?v=__BUILD_ID__" defer></script>
+<!-- demo:start -->
+<script type="module" src="/js/demo-ui.js?v=__BUILD_ID__"></script>
+<!-- demo:end -->
 <script type="module" src="/js/review.js?v=__BUILD_ID__"></script>
 </body>
 </html>
