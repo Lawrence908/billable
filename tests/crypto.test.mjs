@@ -135,3 +135,18 @@ test("a damaged transfer link is refused", async () => {
   const p = await decodeTransfer(`https://x/#import=j${bogus}`);
   assert.equal(p.sessions.length, 0, "entries pointing at a missing client are dropped");
 });
+
+test("change order numbers survive a transfer link", async () => {
+  const now = Date.UTC(2026, 9, 15, 18);
+  const st = normalise({
+    clients: [{ id: "a", name: "Acme", updated: 1 }],
+    sessions: [
+      { id: "s1", clientId: "a", start: now - 3600e3, end: now - 1800e3, category: "change", co: "CO-0001", note: "Rework", updated: 1 },
+      { id: "s2", clientId: "a", start: now - 1800e3, end: now, category: "p2", note: "Import", updated: 1 },
+    ],
+  });
+  const t = buildTransfer(st, now, 7);
+  const link = await encodeTransfer(t.payload, "https://x.example");
+  const { state } = applyTransfer(normalise({}), await decodeTransfer(link), now, (() => { let n = 0; return () => `n${n++}`; })());
+  assert.deepEqual(state.sessions.map((s) => [s.category, s.co, s.note]).sort(), [["change", "CO-0001", "Rework"], ["p2", undefined, "Import"]]);
+});

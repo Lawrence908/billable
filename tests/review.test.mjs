@@ -5,6 +5,7 @@ import { atTime, normalise } from "../src/js/model.js";
 import {
   isBillable, reviewGrid, setBilling,
   addHoursFile, addOfficialClient, addOfficialTask, blankReview, costingLabel, setTaskAlias, clientName, clientTSV, compile, daysBetween, decodeLists, detailCSV, encodeLists, handoffText,
+  addOfficialCustomer, addOrder, isRetiredOrder, needsCheck, officialCustomer, optimizationCustomers, optimizationTSV, ordersFor, removeOrder, setOrderAlias, setOrderRetired,
   hoursFile, hoursFileName, normaliseLists, normaliseReview, parseHoursFile, parseList, phaseLabel, removePerson, setAlias,
   setReviewed, reviewedFor, tasksFor, totalsCSV, weekStart,
 } from "../src/js/review-model.js";
@@ -164,7 +165,7 @@ test("hand-off files: five-column rows per client, CSVs with formulas neutralise
   assert.equal(detail.length, 3); // header, one row, trailing empty
   assert.match(detail[1], /^2026-10-26,"Alex","'=HYPERLINK\(1\)","P2","'\+evil",1\.00,1\.00,/);
   assert.equal(totalsCSV(c).split("\r\n")[1], `"'=HYPERLINK(1)","P2","'+evil",1.00`);
-  assert.match(handoffText(c, r.lists), /=HYPERLINK\(1\): 1\.00 h\n {2}P2 · \+evil: 1\.00 h/);
+  assert.match(handoffText(c), /=HYPERLINK\(1\): 1\.00 h\n {2}P2 · \+evil: 1\.00 h/);
 });
 
 test("reviewed ticks are kept per period", () => {
@@ -180,7 +181,7 @@ test("lists: one name per line, round trip through a link, junk dropped", async 
   const lists = normaliseLists({
     clients: ["Acme", "Beta"], phases: { p2: "Data conversion", pm: "PROJECT MANAGEMENT", bogus: "x" }, tasks: { p2: ["Import"], bogus: ["x"], "*": ["Meeting"] }, by: "Chris", updated: 5,
   });
-  assert.deepEqual(lists, { clients: ["Acme", "Beta"], phases: { p2: "Data conversion", pm: "PROJECT MANAGEMENT" }, tasks: { p2: ["Import"], "*": ["Meeting"] }, by: "Chris", updated: 5 });
+  assert.deepEqual(lists, { clients: ["Acme", "Beta"], customers: [], orders: [], phases: { p2: "Data conversion", pm: "PROJECT MANAGEMENT" }, tasks: { p2: ["Import"], "*": ["Meeting"] }, by: "Chris", updated: 5 });
   const link = await encodeLists(lists, "https://billable.example");
   assert.match(link, /^https:\/\/billable\.example\/#lists=z/);
   assert.deepEqual(await decodeLists(link), lists);
@@ -228,7 +229,7 @@ test("tasks: mapping counts a typed task as an official one; the hand-off keeps 
   assert.deepEqual(c.checks.otherTasks, []);
   assert.deepEqual(c.clients[0].lines.map((l) => [l.label, l.hours]), [["PHASE 2: CONTRACT/BILLINGS · AR replication", 2]]);
   assert.equal(clientTSV(c, "Acme"), "10/26/2026\tAlex\tPHASE 2: CONTRACT/BILLINGS\tAR replication\t1.00\n10/27/2026\tAlex\tPHASE 2: CONTRACT/BILLINGS\tAR replication\t1.00");
-  assert.match(detailCSV(c).split("\r\n")[1], /,"PHASE 2: CONTRACT\/BILLINGS","AR replication",1\.00,1\.00,"Acme",yes,"AR Replication and Verification"$/);
+  assert.match(detailCSV(c).split("\r\n")[1], /,"PHASE 2: CONTRACT\/BILLINGS","AR replication",1\.00,1\.00,"Acme",yes,"AR Replication and Verification",Client tab$/);
   assert.equal(totalsCSV(c).split("\r\n")[1], `"Acme","PHASE 2: CONTRACT/BILLINGS","AR replication",2.00`);
 
   // Undone, the check comes back; the mapping survives a save and load.
@@ -311,4 +312,150 @@ test("grid cells holding something under Checks are flagged", () => {
   const g = reviewGrid(compile(r, "2026-10-26", "2026-10-30"), { level: "clients" });
   assert.equal(g.cell("Unknown Co", "p2").flagged, true);
   assert.equal(g.cell("Acme", "p2").flagged, false);
+});
+
+/* ---------- change orders ---------- */
+
+// A person's hours file; entries are [client, day, start, end, category, note, co].
+function orderFile(employee, entries, from = "2026-10-26", to = "2026-10-30") {
+  const names = [...new Set(entries.map((e) => e[0]))];
+  const st = normalise({
+    clients: names.map((name) => ({ id: name, name, updated: 1 })),
+    sessions: entries.map(([client, d, a, b, category, note, co], i) => ({ id: `s${i}`, clientId: client, start: at(d, a), end: at(d, b), category, note, co, updated: 1 })),
+    settings: { employee, updated: 1 },
+  });
+  return parseHoursFile(JSON.parse(JSON.stringify(hoursFile(st, from, to, at("2026-10-31", "09:00")))));
+}
+
+const orderLists = () => normaliseLists({
+  clients: ["Incoming Co"],
+  customers: ["Live Co", "Older Co"],
+  orders: [{ customer: "Live Co", number: "CO-0002" }, { customer: "Live Co", number: "CO-0010" }, { customer: "Live Co", number: "CO-0001", retired: true }, { customer: "Older Co", number: "CO-0002" }, { customer: "Incoming Co", number: "CO-0001" }],
+  updated: 1,
+});
+
+test("change order lists: numbers belong to a customer, retired ones leave the dropdown only", async () => {
+  const lists = orderLists();
+  assert.deepEqual(optimizationCustomers(lists), ["Incoming Co", "Live Co", "Older Co"]);
+  assert.equal(officialCustomer(lists, "live co"), "Live Co");
+  assert.deepEqual(ordersFor(lists, "live co"), ["CO-0002", "CO-0010"]);
+  assert.deepEqual(ordersFor(lists, "Live Co", { retired: true }), ["CO-0001", "CO-0002", "CO-0010"]);
+  assert.deepEqual(ordersFor(lists, "Older Co"), ["CO-0002"]);
+  assert.deepEqual(ordersFor(lists, "Nobody"), []);
+  assert.ok(isRetiredOrder(lists, "Live Co", "co-0001"));
+  assert.ok(!isRetiredOrder(lists, "Older Co", "CO-0001"));
+  // They survive the link staff get, and damage and repeats are dropped.
+  assert.deepEqual(await decodeLists(await encodeLists(lists, "https://billable.example")), lists);
+  assert.deepEqual(normaliseLists({ orders: [{ customer: "A", number: "CO-1" }, { customer: "a", number: "co-1" }, { customer: "", number: "CO-2" }, { customer: "B" }, null] }).orders, [{ customer: "A", number: "CO-1" }]);
+  assert.equal(normaliseLists(lists).orders.length, 5);
+});
+
+test("change order lists: add, retire, bring back, delete", () => {
+  let r = { ...blankReview(), lists: orderLists() };
+  r = addOrder(r, "Older Co", "CO-0003", 5);
+  assert.deepEqual(ordersFor(r.lists, "Older Co"), ["CO-0002", "CO-0003"]);
+  assert.equal(r.lists.updated, 5);
+  r = setOrderRetired(r, "Older Co", "CO-0002", true, 6);
+  assert.deepEqual(ordersFor(r.lists, "Older Co"), ["CO-0003"]);
+  assert.deepEqual(ordersFor(r.lists, "Live Co"), ["CO-0002", "CO-0010"], "the same number on another customer is untouched");
+  r = setOrderRetired(r, "Older Co", "CO-0002", false, 7);
+  assert.deepEqual(ordersFor(r.lists, "Older Co"), ["CO-0002", "CO-0003"]);
+  r = removeOrder(r, "Older Co", "CO-0003", 8);
+  assert.deepEqual(ordersFor(r.lists, "Older Co"), ["CO-0002"]);
+  r = addOfficialCustomer(r, "New Co", 9);
+  assert.ok(r.lists.customers.includes("New Co"));
+});
+
+test("change orders travel in hours files; a number on phase work is dropped", () => {
+  const f = orderFile("Alex", [["Live Co", "2026-10-26", "09:00", "10:00", "change", "Rework", "CO-0002"], ["Incoming Co", "2026-10-26", "10:00", "11:00", "p2", "Import"]]);
+  const line = (client) => f.lines.find((l) => l.client === client);
+  assert.equal(line("Live Co").co, "CO-0002");
+  assert.ok(!("co" in line("Incoming Co")));
+  const forged = parseHoursFile({ ...f, kind: "billable-hours", v: 1, lines: [{ date: "2026-10-26", client: "X", category: "p2", co: "CO-9", note: "n", ms: 3600e3 }] });
+  assert.ok(!("co" in forged.lines[0]));
+});
+
+test("compile: change order hours sit under the customer, and notes are never judged", () => {
+  let r = { ...blankReview(), lists: { ...orderLists(), tasks: { change: ["Manual AR Replication"] } } };
+  r = addHoursFile(r, orderFile("Alex", [
+    ["Live Co", "2026-10-26", "09:00", "10:00", "change", "A one of a kind note", "CO-0002"],
+    ["Live Co", "2026-10-27", "09:00", "10:00", "change", "Manual AR Replication", "co-0010"],
+    ["Live Co", "2026-10-28", "09:00", "10:00", "change", "Old one", "CO-0001"],
+    ["Incoming Co", "2026-10-26", "10:00", "11:00", "p2", "Import"],
+    ["Incoming Co", "2026-10-26", "11:00", "12:00", "change", "Extra", "CO-0001"],
+  ]), 1);
+  const c = compile(r, "2026-10-26", "2026-10-30");
+  assert.deepEqual(c.checks.unknownClients, []);
+  assert.deepEqual(c.checks.unknownCustomers, []);
+  assert.deepEqual(c.checks.otherTasks, []);
+  assert.deepEqual(c.checks.otherOrders, [], "listed in any case, and a retired one still counts");
+  assert.deepEqual(c.checks.noOrder, []);
+  assert.ok(!c.rows.some(needsCheck));
+  assert.equal(c.rows.find((x) => x.typedCo === "co-0010").co, "CO-0010", "the listed spelling is reported");
+  const incoming = c.clients.find((x) => x.name === "Incoming Co");
+  assert.deepEqual(incoming.lines.map((l) => [l.label, l.hours]), [["P2 · Import", 1], ["Optimization/Change Order · CO-0001 · Extra", 1]]);
+
+  // The review grid gives change orders their own column, and drills to numbers.
+  const top = reviewGrid(c, { level: "clients" });
+  assert.deepEqual(top.colKeys, ["p2", "change"]);
+  assert.equal(top.cell("Incoming Co", "change").value, 1);
+  assert.deepEqual(reviewGrid(c, { level: "category", client: "Live Co", category: "change" }).rowKeys, ["CO-0001 · Old one", "CO-0002 · A one of a kind note", "CO-0010 · Manual AR Replication"]);
+
+  // Each sheet gets its own rows.
+  assert.equal(clientTSV(c, "Incoming Co"), "10/26/2026\tAlex\tP2\tImport\t1.00");
+  assert.equal(clientTSV(c, "Live Co"), "");
+  assert.deepEqual(optimizationTSV(c).split("\n"), [
+    "10/26/2026\tAlex\tIncoming Co\tCO-0001\tExtra\t1.00",
+    "10/26/2026\tAlex\tLive Co\tCO-0002\tA one of a kind note\t1.00",
+    "10/27/2026\tAlex\tLive Co\tCO-0010\tManual AR Replication\t1.00",
+    "10/28/2026\tAlex\tLive Co\tCO-0001\tOld one\t1.00",
+  ]);
+  const detail = detailCSV(c);
+  assert.match(detail, /"Live Co","CO-0002","A one of a kind note",1\.00,1\.00,"Live Co",yes,"A one of a kind note",Optimization/);
+  assert.match(totalsCSV(c), /"Live Co","CO-0010","Manual AR Replication",1\.00/);
+  assert.match(handoffText(c), /Optimization\/Change Order · CO-0002 · A one of a kind note: 1\.00 h/);
+});
+
+test("compile: a typed change order can be mapped, or added to that customer's list", () => {
+  let r = { ...blankReview(), lists: orderLists() };
+  r = addHoursFile(r, orderFile("Alex", [["Live Co", "2026-10-26", "09:00", "10:00", "change", "Rework", "CO-0099"]]), 1);
+  let c = compile(r, "2026-10-26", "2026-10-30");
+  assert.deepEqual(c.checks.otherOrders.map((o) => [o.customer, o.number, o.orders, o.hours]), [["Live Co", "CO-0099", ["CO-0001", "CO-0002", "CO-0010"], 1]]);
+  assert.ok(needsCheck(c.rows[0]));
+
+  const mapped = setOrderAlias(r, "Live Co", "co-0099", "CO-0010");
+  c = compile(mapped, "2026-10-26", "2026-10-30");
+  assert.deepEqual(c.checks.otherOrders, []);
+  assert.equal(c.rows[0].co, "CO-0010");
+  assert.equal(c.rows[0].typedCo, "CO-0099");
+  // The mapping only applies to that customer, and survives a save and load.
+  assert.equal(compile(normaliseReview(JSON.parse(JSON.stringify(mapped))), "2026-10-26", "2026-10-30").rows[0].co, "CO-0010");
+  assert.equal(compile(setOrderAlias(mapped, "Live Co", "CO-0099", ""), "2026-10-26", "2026-10-30").checks.otherOrders.length, 1);
+  assert.equal(compile(addHoursFile(setOrderAlias(r, "Older Co", "CO-0099", "CO-0002"), orderFile("Sam", []), 1), "2026-10-26", "2026-10-30").rows[0].co, "CO-0099");
+
+  c = compile(addOrder(r, "Live Co", "CO-0099", 2), "2026-10-26", "2026-10-30");
+  assert.deepEqual(c.checks.otherOrders, []);
+});
+
+test("compile: the right list judges each side, and a missing number is flagged", () => {
+  let r = { ...blankReview(), lists: orderLists() };
+  r = addHoursFile(r, orderFile("Alex", [
+    ["Live Co", "2026-10-26", "09:00", "10:00", "p2", "A live customer doesn't go back to phases"],
+    ["Stranger", "2026-10-26", "10:00", "11:00", "change", "Who?", "CO-0001"],
+    ["Older Co", "2026-10-26", "11:00", "12:00", "change", "Number forgotten", ""],
+  ]), 1);
+  const { checks } = compile(r, "2026-10-26", "2026-10-30");
+  assert.deepEqual(checks.unknownClients.map((x) => x.name), ["Live Co"]);
+  assert.deepEqual(checks.unknownCustomers.map((x) => x.name), ["Stranger"]);
+  assert.deepEqual(checks.noOrder, [{ employee: "Alex", client: "Older Co", hours: 1 }]);
+  // Added from the check, the customer is known.
+  assert.deepEqual(compile(addOfficialCustomer(r, "Stranger", 2), "2026-10-26", "2026-10-30").checks.unknownCustomers, []);
+});
+
+test("compile: with no change orders listed yet, typed numbers aren't flagged", () => {
+  let r = { ...blankReview(), lists: normaliseLists({ clients: ["Acme"] }) };
+  r = addHoursFile(r, orderFile("Alex", [["Acme", "2026-10-26", "09:00", "10:00", "change", "Rework", "CO-0001"]]), 1);
+  const { checks } = compile(r, "2026-10-26", "2026-10-30");
+  assert.deepEqual(checks.otherOrders, []);
+  assert.deepEqual(checks.unknownCustomers, []);
 });

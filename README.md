@@ -12,7 +12,7 @@ no build step, and no runtime dependencies.
 ## Categories and notes (optional)
 
 Each client card has a **More** button that opens a category dropdown (P0 to P8,
-Project Management, Gaps, Internal, Tech, Optimization/Change Order) and a note box. The running timer, and the
+Project Management, Gaps, Internal, Tech) and a note box. The running timer, and the
 next one started on that card, are labelled with them.
 
 - Changing the category or note mid-timer splits the time at that moment, so the time
@@ -28,6 +28,26 @@ next one started on that card, are labelled with them.
   three 8-minute stretches count as 24 minutes, so 0.5 h, rather than 0.75 h. A client tracked without
   categories reads exactly as before.
 - Under Fix times, entries can be retagged when a switch was forgotten.
+
+## Change orders
+
+Optimization/Change Order work is for customers who may never appear on the
+implementation list, and it all goes on one sheet rather than the client's tab.
+
+- **The slider above the add box** picks the list a name comes from: Implementation
+  (the official clients) or Optimization (existing customers plus those clients, since
+  a client still being implemented can get a change order too).
+- **The slider on each card** switches it between Phases and COs. A client has one
+  card either way. On COs the card turns blue, and the phase dropdown becomes that
+  customer's change orders, with a note box for what the time was for. Switching goes
+  back to what the card last tracked on that side, and splits a running timer like any
+  other change of label.
+- **A number that isn't listed yet** can be typed with Other. It shows under Checks,
+  where the reviewer maps it to a listed one or adds it to that customer. Numbers repeat
+  across customers (each has its own CO-0001), so they only mean something together.
+- **Copy all Optimization** in the summary copies the day's change orders from every
+  card in that sheet's six columns: Date, Employee, Customer, Costing section (the CO
+  number), Notes, Hours. A client's own copy button leaves them out.
 - A time typed under Fix times is saved when you leave the box, press Enter, or pause
   for two seconds, so a two-digit minute like 30 is never cut off after its first digit.
 
@@ -61,14 +81,17 @@ app, and keeps the same promise: nothing leaves the browser.
   they like. The reviewer drops everyone's files on the page. A newer file for the
   same days replaces that person's older lines.
 - **Official lists go out as a link.** The reviewer enters the client names (the
-  timesheet Sheet's tab names), names for P0 to P8, and tasks per category, then
+  timesheet Sheet's tab names), existing customers, approved change orders per
+  customer (retiring a finished one takes it off the dropdown and keeps it on record),
+  names for P0 to P8, and tasks per category, then
   copies a link or shows a QR code. The lists ride after the `#`, so they are never
   sent to or stored on the server, which matters because client names are
   confidential. Opening the link saves the lists on that device: clients and tasks
   are suggested as people type, phase names show in the category dropdown, and a
   client not on the list asks before it is added.
 - **Checks** flag clients not on the list (with a one-step mapping to the official
-  name, remembered for later files), tasks not on their category's own list, time
+  name, remembered for later files), tasks not on their category's own list, change
+  order numbers not on that customer's list or left blank, time
   with no category, weekdays a person's files do not cover, and files saved while a
   timer was running.
 - **The review grid** reads like a spreadsheet you drill into: clients by
@@ -97,7 +120,7 @@ meet anyone's real hours.
   few minutes ago. No timer is running, so Start is the first thing to try.
 - **`/review.html`** opens on last week with five people's hours files loaded, and a
   few mistakes planted for Checks to find: a misspelt client, a task not on the list,
-  untagged time, a missing Friday, and a file saved with a timer running.
+  a typed change order number, untagged time, a missing Friday, and a file saved with a timer running.
 - **The data is made relative to the day it is first opened**, and a visitor keeps
   their copy, changes included, for a week, so a review can be finished another day.
   After that it is made fresh, so it never looks stale. The banner's **Reset demo**
@@ -277,6 +300,7 @@ network that only the front container joins. If you are not behind Cloudflare, s
 npm test                                            # unit tests, about two seconds
 node tests/e2e/two-devices.mjs http://localhost:8175   # needs: npm i --no-save playwright
 node tests/e2e/review.mjs http://localhost:8175        # the review flow, end to end
+node tests/e2e/change-orders.mjs http://localhost:8175 # change orders, from the lists to the hand-off
 node tests/e2e/demo.mjs http://localhost:8187 http://localhost:8175   # the demo, and none of it in the real build
 ```
 

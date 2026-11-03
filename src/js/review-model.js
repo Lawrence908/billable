@@ -8,7 +8,7 @@
 // Client names are confidential, so they are never published on the site.
 
 import { compress, decompress, fromB64u, toB64u } from "./bytes.js";
-import { CATEGORIES, HOUR, categoryLabel, dayBounds, dayKey, existingSessions, fmtHours, roundQuarter, shiftDay, summaryRows } from "./model.js";
+import { CATEGORIES, CO_CATEGORY, HOUR, MAX_CO, categoryLabel, dayBounds, dayKey, existingSessions, fmtHours, roundQuarter, shiftDay, summaryRows } from "./model.js";
 
 export const HOURS_KIND = "billable-hours";
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -49,7 +49,7 @@ export function hoursFile(st, from, to, now) {
   const lines = [];
   for (const date of daysBetween(from, to)) {
     for (const row of summaryRows(st, date, now)) {
-      for (const l of row.lines) lines.push({ date, client: row.client.name, category: l.category, note: l.note, ms: Math.round(l.ms), hours: l.hours });
+      for (const l of row.lines) lines.push({ date, client: row.client.name, category: l.category, ...(l.co ? { co: l.co } : {}), note: l.note, ms: Math.round(l.ms), hours: l.hours });
     }
   }
   const [start] = dayBounds(from);
@@ -84,7 +84,8 @@ export function parseHoursFile(raw) {
     if (!client) continue;
     const category = CATEGORY_KEYS.has(l.category) ? l.category : "";
     // Hours are recomputed from the time, so a hand-edited file cannot claim more than it tracked.
-    lines.push({ date: l.date, client, category, note: category ? text(l.note) : "", ms, hours: roundQuarter(ms) });
+    const co = category === CO_CATEGORY ? text(l.co, MAX_CO) : "";
+    lines.push({ date: l.date, client, category, ...(co ? { co } : {}), note: category ? text(l.note) : "", ms, hours: roundQuarter(ms) });
   }
   return { employee, from: f.from, to: f.to, exported: Number.isFinite(f.exported) ? f.exported : 0, running: !!f.running, lines };
 }
@@ -92,7 +93,7 @@ export function parseHoursFile(raw) {
 /* ---------- the reviewer's store ---------- */
 
 export function blankReview() {
-  return { lists: blankLists(), people: {}, aliases: {}, taskAliases: {}, reviewed: {}, period: null, arEmail: "", billing: blankBilling(), prefs: blankPrefs() };
+  return { lists: blankLists(), people: {}, aliases: {}, taskAliases: {}, orderAliases: {}, reviewed: {}, period: null, arEmail: "", billing: blankBilling(), prefs: blankPrefs() };
 }
 
 // Adds one person's file. Their lines inside the file's dates are replaced, so
@@ -139,6 +140,10 @@ export function normaliseReview(r) {
     const [category, note] = k.split("\u0000");
     if (CATEGORY_KEYS.has(category) && note && text(v)) out.taskAliases[taskKey(category, note)] = text(v);
   }
+  for (const [k, v] of Object.entries(r.orderAliases && typeof r.orderAliases === "object" ? r.orderAliases : {})) {
+    const [customer, typed] = k.split("\u0000");
+    if (customer && typed && text(v, MAX_CO)) out.orderAliases[orderKey(customer, typed)] = text(v, MAX_CO);
+  }
   for (const [period, clients] of Object.entries(r.reviewed && typeof r.reviewed === "object" ? r.reviewed : {})) {
     if (clients && typeof clients === "object") out.reviewed[period] = Object.fromEntries(Object.entries(clients).filter(([, v]) => v === true));
   }
@@ -156,12 +161,18 @@ export function normaliseReview(r) {
 
 /* ---------- official lists ---------- */
 
-// { clients: [names], phases: { p2: "PHASE 2: CONTRACT/BILLINGS", ... }, tasks: { p2: [...], "*": [...] }, by, updated }
-// `phases` names any category as the timesheet's Costing section writes it.
-// "*" holds tasks that belong under every category (meetings, admin).
+// { clients: [names], customers: [names], orders: [{ customer, number, retired }],
+//   phases: { p2: "PHASE 2: CONTRACT/BILLINGS", ... }, tasks: { p2: [...], "*": [...] }, by, updated }
+// `clients` are being implemented; `customers` are live already and only come
+// back for change orders. `phases` names any category as the timesheet's
+// Costing section writes it. "*" holds tasks that belong under every category
+// (meetings, admin). A retired order leaves the dropdown but stays on record,
+// so its past hours still count as listed.
 export function blankLists() {
-  return { clients: [], phases: {}, tasks: {}, by: "", updated: 0 };
+  return { clients: [], customers: [], orders: [], phases: {}, tasks: {}, by: "", updated: 0 };
 }
+
+const orderKey = (customer, number) => `${fold(customer)}\u0000${fold(number)}`;
 
 const uniqueNames = (list) => {
   const seen = new Set();
@@ -183,6 +194,15 @@ export function normaliseLists(l) {
   const out = blankLists();
   if (!l || typeof l !== "object") return out;
   out.clients = uniqueNames(l.clients).slice(0, 2000);
+  out.customers = uniqueNames(l.customers).slice(0, 2000);
+  const seenOrders = new Set();
+  for (const o of Array.isArray(l.orders) ? l.orders.slice(0, 5000) : []) {
+    const customer = text(o?.customer);
+    const number = text(o?.number, MAX_CO);
+    if (!customer || !number || seenOrders.has(orderKey(customer, number))) continue;
+    seenOrders.add(orderKey(customer, number));
+    out.orders.push({ customer, number, ...(o.retired ? { retired: true } : {}) });
+  }
   for (const c of CATEGORIES) {
     if (text(l.phases?.[c.key])) out.phases[c.key] = text(l.phases[c.key]);
   }
@@ -195,7 +215,7 @@ export function normaliseLists(l) {
   return out;
 }
 
-export const hasLists = (l) => !!l && (l.clients.length > 0 || Object.keys(l.tasks).length > 0 || Object.keys(l.phases).length > 0);
+export const hasLists = (l) => !!l && (l.clients.length > 0 || l.customers.length > 0 || l.orders.length > 0 || Object.keys(l.tasks).length > 0 || Object.keys(l.phases).length > 0);
 
 // How a category reads on screen: "P2 · Contract/Billings" when the phase has
 // a name, just the name when it already says which phase it is ("PHASE 2:
@@ -217,6 +237,25 @@ export const tasksFor = (lists, category) =>
   !category || !lists ? [] : uniqueNames([...(lists.tasks[category] || []), ...(lists.tasks["*"] || [])]);
 
 export const officialClient = (lists, name) => lists.clients.find((c) => c.toLowerCase() === fold(name)) || null;
+
+// Who a change order can be for: live customers, and clients still being
+// implemented, who can get one too.
+export const optimizationCustomers = (lists) =>
+  uniqueNames([...lists.customers, ...lists.clients]).sort((a, b) => a.localeCompare(b));
+
+export const officialCustomer = (lists, name) => optimizationCustomers(lists).find((c) => c.toLowerCase() === fold(name)) || null;
+
+export const isRetiredOrder = (lists, customer, number) =>
+  lists.orders.some((o) => o.retired && fold(o.customer) === fold(customer) && fold(o.number) === fold(number));
+
+// A customer's change order numbers, in number order. Numbers repeat across
+// customers, so an order only means something together with its customer.
+export function ordersFor(lists, customer, { retired = false } = {}) {
+  return lists.orders
+    .filter((o) => fold(o.customer) === fold(customer) && (retired || !o.retired))
+    .map((o) => o.number)
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
 
 export async function encodeLists(lists, origin) {
   const raw = new TextEncoder().encode(JSON.stringify({ v: 1, ...normaliseLists(lists) }));
@@ -263,6 +302,32 @@ export function addOfficialClient(review, name, now) {
   return { ...review, lists: normaliseLists({ ...review.lists, clients: [...review.lists.clients, name], updated: now }) };
 }
 
+export function addOfficialCustomer(review, name, now) {
+  return { ...review, lists: normaliseLists({ ...review.lists, customers: [...review.lists.customers, name], updated: now }) };
+}
+
+export function addOrder(review, customer, number, now) {
+  return { ...review, lists: normaliseLists({ ...review.lists, orders: [...review.lists.orders, { customer, number }], updated: now }) };
+}
+
+export function setOrderRetired(review, customer, number, retired, now) {
+  const orders = review.lists.orders.map((o) => (orderKey(o.customer, o.number) === orderKey(customer, number) ? { ...o, retired } : o));
+  return { ...review, lists: normaliseLists({ ...review.lists, orders, updated: now }) };
+}
+
+export function removeOrder(review, customer, number, now) {
+  const orders = review.lists.orders.filter((o) => orderKey(o.customer, o.number) !== orderKey(customer, number));
+  return { ...review, lists: normaliseLists({ ...review.lists, orders, updated: now }) };
+}
+
+// Counts a number typed for a customer as one of their listed change orders.
+export function setOrderAlias(review, customer, typed, official) {
+  const orderAliases = { ...review.orderAliases };
+  if (official) orderAliases[orderKey(customer, typed)] = official;
+  else delete orderAliases[orderKey(customer, typed)];
+  return { ...review, orderAliases };
+}
+
 export function addOfficialTask(review, category, task, now) {
   const tasks = { ...review.lists.tasks, [category]: [...(review.lists.tasks[category] || []), task] };
   return { ...review, lists: normaliseLists({ ...review.lists, tasks, updated: now }) };
@@ -280,7 +345,7 @@ export function setAlias(review, name, official) {
 export function clientName(review, name) {
   const alias = review.aliases[fold(name)];
   if (alias) return alias;
-  return officialClient(review.lists, name) || name;
+  return officialCustomer(review.lists, name) || name;
 }
 
 /* ---------- billable time ---------- */
@@ -317,6 +382,8 @@ export function compile(review, from, to, { billableOnly = false } = {}) {
   const { lists } = review;
   const officialSet = new Set(lists.clients.map((c) => c.toLowerCase()));
   const checkClients = lists.clients.length > 0;
+  const customerSet = new Set(optimizationCustomers(lists).map((c) => c.toLowerCase()));
+  const listedOrders = new Map(lists.orders.map((o) => [orderKey(o.customer, o.number), o.number]));
   const rows = [];
   for (const person of Object.values(review.people)) {
     for (const l of person.lines) {
@@ -326,17 +393,25 @@ export function compile(review, from, to, { billableOnly = false } = {}) {
       const mapped = l.category && l.note ? review.taskAliases[taskKey(l.category, l.note)] : null;
       const wanted = (mapped || l.note).toLowerCase();
       const task = official.find((t) => t.toLowerCase() === wanted) || (mapped && official.length ? null : mapped);
+      const onOrder = l.category === CO_CATEGORY;
+      const typedCo = l.co || "";
+      const co = onOrder ? review.orderAliases[orderKey(client, typedCo)] || listedOrders.get(orderKey(client, typedCo)) || typedCo : "";
       rows.push({
         ...l,
         typedClient: l.client,
         typedNote: l.note,
+        typedCo,
+        co,
         client,
         employee: person.employee,
         note: task || l.note,
-        officialClient: !checkClients || officialSet.has(client.toLowerCase()),
+        officialClient: onOrder ? customerSet.size === 0 || customerSet.has(client.toLowerCase()) : !checkClients || officialSet.has(client.toLowerCase()),
         // Only judged where the category has tasks of its own: the shared
-        // tasks alone don't make every other note in it "other".
-        otherTask: !!l.category && (lists.tasks[l.category] || []).length > 0 && !task,
+        // tasks alone don't make every other note in it "other". A change
+        // order's note is free text, so only its number is judged.
+        otherTask: !onOrder && !!l.category && (lists.tasks[l.category] || []).length > 0 && !task,
+        noOrder: onOrder && !co,
+        otherOrder: onOrder && !!co && lists.orders.length > 0 && !listedOrders.has(orderKey(client, co)),
       });
     }
   }
@@ -348,11 +423,12 @@ export function compile(review, from, to, { billableOnly = false } = {}) {
   for (const r of rows) {
     if (!byClient.has(r.client)) byClient.set(r.client, { name: r.client, official: r.officialClient, hours: 0, ms: 0, lines: new Map(), people: new Set() });
     const c = byClient.get(r.client);
+    c.official &&= r.officialClient;
     c.hours += r.hours;
     c.ms += r.ms;
     c.people.add(r.employee);
-    const k = `${r.category}\u0000${r.note.toLowerCase()}`;
-    if (!c.lines.has(k)) c.lines.set(k, { category: r.category, note: r.note, otherTask: r.otherTask, hours: 0, ms: 0, people: new Map() });
+    const k = `${r.category}\u0000${r.co.toLowerCase()}\u0000${r.note.toLowerCase()}`;
+    if (!c.lines.has(k)) c.lines.set(k, { category: r.category, co: r.co, note: r.note, otherTask: r.otherTask, hours: 0, ms: 0, people: new Map() });
     const line = c.lines.get(k);
     line.hours += r.hours;
     line.ms += r.ms;
@@ -363,8 +439,8 @@ export function compile(review, from, to, { billableOnly = false } = {}) {
       ...c,
       people: [...c.people].sort(),
       lines: [...c.lines.values()]
-        .map((l) => ({ ...l, label: l.category ? `${phaseLabel(lists, l.category)}${l.note ? ` · ${l.note}` : ""}` : "No category", people: [...l.people].map(([employee, hours]) => ({ employee, hours })) }))
-        .sort((a, b) => categorySort(a.category) - categorySort(b.category) || a.note.localeCompare(b.note)),
+        .map((l) => ({ ...l, label: l.category ? [phaseLabel(lists, l.category), l.co, l.note].filter(Boolean).join(" · ") : "No category", people: [...l.people].map(([employee, hours]) => ({ employee, hours })) }))
+        .sort((a, b) => categorySort(a.category) - categorySort(b.category) || a.co.localeCompare(b.co) || a.note.localeCompare(b.note)),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
@@ -398,8 +474,14 @@ export function compile(review, from, to, { billableOnly = false } = {}) {
     return [...m.values()].map((x) => ({ ...x, people: [...x.people].sort() }));
   };
   const checks = {
-    unknownClients: group(rows.filter((r) => !r.officialClient), (r) => r.typedClient.toLowerCase())
+    unknownClients: group(rows.filter((r) => !r.officialClient && r.category !== CO_CATEGORY), (r) => r.typedClient.toLowerCase())
       .map((x) => ({ name: x.typedClient, hours: x.hours, people: x.people })),
+    unknownCustomers: group(rows.filter((r) => !r.officialClient && r.category === CO_CATEGORY), (r) => r.typedClient.toLowerCase())
+      .map((x) => ({ name: x.typedClient, hours: x.hours, people: x.people })),
+    otherOrders: group(rows.filter((r) => r.otherOrder), (r) => orderKey(r.client, r.co))
+      .map((x) => ({ customer: x.client, number: x.co, orders: ordersFor(lists, x.client, { retired: true }), hours: x.hours, people: x.people })),
+    noOrder: group(rows.filter((r) => r.noOrder), (r) => `${r.employee}\u0000${r.client}`)
+      .map((x) => ({ employee: x.employee, client: x.client, hours: x.hours })),
     otherTasks: group(rows.filter((r) => r.otherTask), (r) => `${r.category}\u0000${r.note.toLowerCase()}`)
       .map((x) => ({ category: x.category, label: phaseLabel(lists, x.category), note: x.note, tasks: tasksFor(lists, x.category), hours: x.hours, people: x.people })),
     noCategory: group(rows.filter((r) => !r.category), (r) => `${r.employee}\u0000${r.client}`)
@@ -422,13 +504,17 @@ const sheetDate = (key) => {
   return `${m}/${d}/${y}`;
 };
 
+// The Costing section column: a change order's number, else the category's name.
+const costingOf = (lists, line) => line.co || costingLabel(lists, line.category);
+
 // Every person's line for every day, one row each.
 export function detailCSV(compiled) {
-  const out = ["date,employee,client,costing_section,notes,hours,tracked_hours,client_as_typed,official_task,notes_as_typed"];
+  const out = ["date,employee,client,costing_section,notes,hours,tracked_hours,client_as_typed,official_task,notes_as_typed,timesheet"];
   for (const r of compiled.rows) {
     if (!r.hours) continue;
-    out.push([r.date, csvCell(r.employee), csvCell(r.client), csvCell(costingLabel(compiled.lists, r.category)), csvCell(r.note), fmtHours(r.hours),
-      (r.ms / HOUR).toFixed(2), csvCell(r.typedClient), r.category ? (r.otherTask ? "no" : "yes") : "", csvCell(r.typedNote)].join(","));
+    out.push([r.date, csvCell(r.employee), csvCell(r.client), csvCell(costingOf(compiled.lists, r)), csvCell(r.note), fmtHours(r.hours),
+      (r.ms / HOUR).toFixed(2), csvCell(r.typedClient), r.category ? (r.otherTask || r.otherOrder || r.noOrder ? "no" : "yes") : "", csvCell(r.typedNote),
+      r.category === CO_CATEGORY ? "Optimization" : "Client tab"].join(","));
   }
   return out.join("\r\n") + "\r\n";
 }
@@ -437,26 +523,36 @@ export function detailCSV(compiled) {
 export function totalsCSV(compiled) {
   const out = ["client,costing_section,notes,hours"];
   for (const c of compiled.clients) {
-    for (const l of c.lines) if (l.hours) out.push([csvCell(c.name), csvCell(costingLabel(compiled.lists, l.category)), csvCell(l.note), fmtHours(l.hours)].join(","));
+    for (const l of c.lines) if (l.hours) out.push([csvCell(c.name), csvCell(costingOf(compiled.lists, l)), csvCell(l.note), fmtHours(l.hours)].join(","));
   }
   return out.join("\r\n") + "\r\n";
 }
 
 // One client's rows in the timesheet's five columns (Date, Employee, Costing
 // section, Notes, Hours), tab-separated for pasting into that client's tab.
+// Change orders go on their own sheet, with optimizationTSV.
 export function clientTSV(compiled, client) {
   return compiled.rows
-    .filter((r) => r.client === client && r.hours)
+    .filter((r) => r.client === client && r.hours && r.category !== CO_CATEGORY)
     .map((r) => [sheetDate(r.date), r.employee, costingLabel(compiled.lists, r.category), r.note, fmtHours(r.hours)].map(tsvCell).join("\t"))
     .join("\n");
 }
 
-export function handoffText(compiled, lists) {
+// Everyone's change order rows in the Optimization sheet's six columns (Date,
+// Employee, Customer, Costing section, Notes, Hours).
+export function optimizationTSV(compiled) {
+  return compiled.rows
+    .filter((r) => r.category === CO_CATEGORY && r.hours)
+    .map((r) => [sheetDate(r.date), r.employee, r.client, r.co, r.note, fmtHours(r.hours)].map(tsvCell).join("\t"))
+    .join("\n");
+}
+
+export function handoffText(compiled) {
   const lines = [`Billable hours, ${compiled.from} to ${compiled.to}`, ""];
   if (!compiled.clients.length) lines.push("No hours in this period.");
   for (const c of compiled.clients) {
     lines.push(`${c.name}: ${fmtHours(c.hours)} h`);
-    for (const l of c.lines) if (l.hours) lines.push(`  ${l.category ? phaseLabel(lists, l.category) : "No category"}${l.note ? ` · ${l.note}` : ""}: ${fmtHours(l.hours)} h`);
+    for (const l of c.lines) if (l.hours) lines.push(`  ${l.label}: ${fmtHours(l.hours)} h`);
   }
   lines.push("", `Total: ${fmtHours(compiled.hours)} h from ${compiled.people.filter((p) => p.hours).length} people.`,
     "Each person's line for each day is rounded to the nearest 0.25 h, then added up.");
@@ -465,8 +561,11 @@ export function handoffText(compiled, lists) {
 
 /* ---------- the review grid ---------- */
 
-// A line still needing attention: a client or task not on the lists, or no category.
-export const needsCheck = (r) => !r.officialClient || r.otherTask || !r.category;
+// A line still needing attention: a client, task or change order not on the lists, or no category.
+export const needsCheck = (r) => !r.officialClient || r.otherTask || r.otherOrder || r.noOrder || !r.category;
+
+// What a line was for, within its category.
+export const lineNote = (r) => [r.co, r.note].filter(Boolean).join(" · ");
 
 // A spreadsheet of `rows`: one row per rowOf(r), one column per colOf(r),
 // each cell the sum of valueOf(r), with totals both ways. `cols` fixes the
@@ -509,7 +608,7 @@ export function pivot(rows, { rowOf, colOf, valueOf = (r) => r.hours, sortRows, 
 export function reviewGrid(compiled, view, { tracked = false } = {}) {
   const valueOf = tracked ? (r) => r.ms / HOUR : (r) => r.hours;
   const byName = (a, b) => a.localeCompare(b);
-  const lineOf = (r) => `${r.category}\u0000${r.note}`;
+  const lineOf = (r) => `${r.category}\u0000${lineNote(r)}`;
   const { rows } = compiled;
   switch (view.level) {
     case "client":
@@ -525,7 +624,7 @@ export function reviewGrid(compiled, view, { tracked = false } = {}) {
       });
     }
     case "category":
-      return pivot(rows.filter((r) => r.client === view.client && r.category === view.category), { rowOf: (r) => r.note, colOf: (r) => r.employee, valueOf, sortRows: byName, sortCols: byName });
+      return pivot(rows.filter((r) => r.client === view.client && r.category === view.category), { rowOf: lineNote, colOf: (r) => r.employee, valueOf, sortRows: byName, sortCols: byName });
     default:
       return pivot(rows, { rowOf: (r) => r.client, colOf: (r) => r.category, valueOf, sortRows: byName, sortCols: compareCategories });
   }

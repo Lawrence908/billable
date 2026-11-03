@@ -28,9 +28,25 @@ const PHASES = {
   "Maple Street Realty": ["p2", "p3", "p4", "p4"],
 };
 
+// Live customers, who only come back for change orders. Numbers restart per
+// customer, and Tidewater, still being implemented, has one too.
+const HARBOR = "Harbor Point Hotels";
+const REDWOOD = "Redwood Pharmacy";
+const SUNRISE = "Sunrise Vet Clinic";
+const TIDEWATER = "Tidewater Brewing";
+
 export const DEMO_LISTS = normaliseLists({
   by: "Demo reviewer",
   clients: [COMPANY, ...Object.keys(PHASES)],
+  customers: [HARBOR, REDWOOD, SUNRISE],
+  orders: [
+    { customer: HARBOR, number: "CO-0001" },
+    { customer: HARBOR, number: "CO-0002" },
+    { customer: REDWOOD, number: "CO-0001" },
+    { customer: SUNRISE, number: "CO-0001", retired: true },
+    { customer: SUNRISE, number: "CO-0002" },
+    { customer: TIDEWATER, number: "CO-0001" },
+  ],
   phases: {
     p0: "Kickoff", p1: "Discovery", p2: "Data migration", p3: "Configuration", p4: "Integrations",
     p5: "Training", p6: "Testing", p7: "Go-live", p8: "Support",
@@ -47,7 +63,7 @@ export const DEMO_LISTS = normaliseLists({
     p8: ["Support tickets", "Health check"],
     pm: ["Status meeting", "Scheduling", "Status report"],
     tech: ["Bug investigation", "Environment setup"],
-    change: ["Quote", "Custom report"],
+    change: ["Custom report", "Data fix", "Extra training"],
     internal: ["Team meeting", "Admin", "Product training"],
     "*": ["Email"],
   },
@@ -55,31 +71,38 @@ export const DEMO_LISTS = normaliseLists({
 
 // Who works on what. `as` is how a person types a client's name, and `notes`
 // swaps a category's official tasks for their own wording: both are planted
-// mistakes for the review page's Checks to find.
+// mistakes for the review page's Checks to find. `orders` are the change orders
+// they work on, as [customer, number].
 const PEOPLE = [
   {
     employee: DEMO_EMPLOYEE,
     clients: { "Northwind Logistics": 3, "Copperleaf Bakery Co.": 3, "Orbit Fitness Studios": 2, "Tidewater Brewing": 2, "Bluefin Dental Group": 2 },
+    orders: [[HARBOR, "CO-0001"], [TIDEWATER, "CO-0001"]],
   },
   {
     employee: "Sam Patel",
     clients: { "Northwind Logistics": 3, "Maple Street Realty": 2, "Tidewater Brewing": 1 },
     notes: { p5: ["Onsite training"] },
+    orders: [[HARBOR, "CO-0002"], [REDWOOD, "CO-0001"]],
     running: true, // saved last week's file with a timer still going
   },
   {
     employee: "Jordan Lee",
     clients: { "Northwind Logistics": 2, "Orbit Fitness Studios": 3, "Copperleaf Bakery Co.": 1 },
     as: { "Northwind Logistics": "Northwind Logistic" },
+    orders: [[REDWOOD, "CO-0001"]],
+    typedOrder: true, // typed a change order number that isn't on the list, last Wednesday
   },
   {
     employee: "Priya Shah",
     clients: { "Maple Street Realty": 3, "Copperleaf Bakery Co.": 2, "Bluefin Dental Group": 1 },
+    orders: [[SUNRISE, "CO-0002"]],
     untagged: true, // forgot to pick a category one afternoon last week
   },
   {
     employee: "Morgan Chen",
     clients: { "Tidewater Brewing": 3, "Orbit Fitness Studios": 2, "Maple Street Realty": 1 },
+    orders: [[SUNRISE, "CO-0002"], [TIDEWATER, "CO-0001"]],
     dayOff: true, // off last Friday, so last week's file stops on Thursday
   },
 ];
@@ -134,7 +157,10 @@ function task(r, person, week) {
   const typed = person.as?.[client] || client;
   if (roll < 0.22) return { client: typed, category: "pm", note: pick(r, DEMO_LISTS.tasks.pm) };
   if (roll < 0.3) return { client: typed, category: "tech", note: pick(r, DEMO_LISTS.tasks.tech) };
-  if (roll < 0.33) return { client: typed, category: "change", note: pick(r, DEMO_LISTS.tasks.change) };
+  if (roll < 0.38) {
+    const [customer, co] = pick(r, person.orders);
+    return { client: customer, category: "change", co, note: pick(r, DEMO_LISTS.tasks.change) };
+  }
   const phase = PHASES[client][week];
   return { client: typed, category: phase, note: pick(r, person.notes?.[phase] || DEMO_LISTS.tasks[phase]) };
 }
@@ -169,6 +195,10 @@ function workday(person, key, today) {
     const b = blocks.find((x) => x.from >= 13 * 60);
     if (b) Object.assign(b, { category: "", note: "" });
   }
+  if (person.typedOrder && key === shiftDay(lastWeek(today).from, 2)) {
+    const b = blocks.find((x) => x.from >= 13 * 60);
+    if (b) Object.assign(b, { client: REDWOOD, category: "change", co: "CO-0099", note: "Data fix" });
+  }
   return blocks.map(({ from, to, ...b }) => ({ ...b, start: atMinute(key, from), end: atMinute(key, to) }));
 }
 
@@ -186,14 +216,14 @@ function workdays(person, today, last) {
 // A person's state from their blocks: clients in a fixed order, each card
 // tagged with what it was last used for, and nothing running.
 function stateFrom(person, blocks, now) {
-  const names = [...new Set([...Object.keys(person.clients).map((n) => person.as?.[n] || n), COMPANY])];
+  const names = [...new Set([...Object.keys(person.clients).map((n) => person.as?.[n] || n), COMPANY, ...person.orders.map(([customer]) => customer)])];
   const base = blocks.length ? blocks[0].start : now;
   const clients = names.map((name, i) => ({ id: newId(base + i), name, archived: false, updated: now }));
   const idOf = new Map(clients.map((c) => [c.name, c.id]));
-  const sessions = blocks.map((b) => ({ id: newId(b.start), clientId: idOf.get(b.client), start: b.start, end: b.end, category: b.category, note: b.note, updated: now }));
+  const sessions = blocks.map((b) => ({ id: newId(b.start), clientId: idOf.get(b.client), start: b.start, end: b.end, category: b.category, co: b.co, note: b.note, updated: now }));
   for (const c of clients) {
     const last = blocks.filter((b) => b.client === c.name).pop();
-    if (last) Object.assign(c, { category: last.category, note: last.note });
+    if (last) Object.assign(c, { category: last.category, note: last.note, co: last.co });
     // A client with no work this week has finished: removed from the list, its hours kept.
     if (person.clients[c.name] && !PHASES[c.name][WEEKS]) c.archived = true;
   }

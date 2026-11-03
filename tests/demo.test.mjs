@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { HOUR, MINUTE, atTime, dayKey, existingClients, existingSessions, normalise, shiftDay, summaryRows } from "../src/js/model.js";
-import { compile, hoursFile, isWeekday, parseHoursFile, tasksFor } from "../src/js/review-model.js";
+import { compile, hoursFile, isWeekday, optimizationCustomers, ordersFor, parseHoursFile, tasksFor } from "../src/js/review-model.js";
 import { COMPANY, DEMO_EMPLOYEE, DEMO_LISTS, demoReview, demoState, historyStart, lastWeek } from "../src/js/demo.js";
 
 // Moments the demo might be opened: a Wednesday afternoon, a Monday before
@@ -64,8 +64,9 @@ test("demo state: the same day gets the same hours, and the official names", () 
   const st = demoState(now);
   for (const s of existingSessions(st)) {
     const client = existingClients(st).find((c) => c.id === s.clientId).name;
-    assert.ok(DEMO_LISTS.clients.includes(client), client);
+    assert.ok((s.category === "change" ? optimizationCustomers(DEMO_LISTS) : DEMO_LISTS.clients).includes(client), client);
     assert.ok(tasksFor(DEMO_LISTS, s.category).includes(s.note), `${s.category} ${s.note}`);
+    if (s.category === "change") assert.ok(ordersFor(DEMO_LISTS, client).includes(s.co), `${client} ${s.co}`);
   }
   // A client finished before this week is removed from the list, with its hours kept.
   assert.deepEqual(existingClients(st).filter((c) => c.archived).map((c) => c.name), ["Bluefin Dental Group"]);
@@ -84,6 +85,11 @@ test("demo review: last week shows each planted mistake under Checks", () => {
     assert.deepEqual(c.checks.noCategory.map((x) => x.employee), ["Priya Shah"]);
     assert.deepEqual(c.checks.missingDays, [{ employee: "Morgan Chen", days: [shiftDay(lw.from, 4)] }]);
     assert.deepEqual(c.checks.running, ["Sam Patel"]);
+    assert.deepEqual(c.checks.otherOrders.map((o) => [o.customer, o.number]), [["Redwood Pharmacy", "CO-0099"]]);
+    assert.deepEqual(c.checks.unknownCustomers, []);
+    assert.deepEqual(c.checks.noOrder, []);
+    const history = compile(review, historyStart(today), today).rows;
+    assert.ok(history.some((r) => r.category === "change" && r.client === "Harbor Point Hotels"), "live customers have hours");
     assert.ok(c.hours > 5 * 30 && c.hours < 5 * 40, `${c.hours} h`);
     // Internal time is in the store, kept out of the billable view.
     assert.ok(compile(review, lw.from, lw.to).rows.some((r) => r.client === COMPANY));
@@ -98,7 +104,7 @@ test("demo review: Alex's lines are the app's own, as an hours file would carry 
   const lw = lastWeek(dayKey(now));
   const sent = parseHoursFile(hoursFile(st, lw.from, shiftDay(lw.from, 4), now)).lines;
   const held = review.people[DEMO_EMPLOYEE.toLowerCase()].lines.filter((l) => l.date >= lw.from && l.date <= lw.to);
-  const key = (l) => `${l.date}|${l.client}|${l.category}|${l.note}|${l.hours}`;
+  const key = (l) => `${l.date}|${l.client}|${l.category}|${l.co}|${l.note}|${l.hours}`;
   assert.deepEqual(held.map(key).sort(), sent.map(key).sort());
 });
 

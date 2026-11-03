@@ -8,15 +8,18 @@
 // request after the page has loaded.
 
 import {
-  CATEGORIES, LUNCH_END, LUNCH_START, activeClients, atTime, clientById, clientByName, clock, csvFor, dayBounds, dayKey, endAfter,
-  existingClients, existingSessions, fmtHM, fmtHMS, fmtHours, lunchBreak, lunchRestarts, merge, newId, normalise, noteSuggestions,
-  prettyDay, retagClient, retagSession, runningFor, sheetRows, shiftDay, stopAt, summaryRows, summaryText, tagLabel,
+  CATEGORIES, CO_CATEGORY, LUNCH_END, LUNCH_START, MAX_CO, activeClients, atTime, clientById, clientByName, clock, csvFor, dayBounds, dayKey, endAfter,
+  existingClients, existingSessions, fmtHM, fmtHMS, fmtHours, lastTag, lunchBreak, lunchRestarts, merge, newId, normalise, noteSuggestions,
+  optimizationRows, prettyDay, retagClient, retagSession, runningFor, sheetRows, shiftDay, stopAt, summaryRows, summaryText, tagLabel,
   timelineFor, timerNudges, toTSV, toggleTimer, totalsFor,
 } from "./model.js";
 import { SYNC_ENABLED } from "./config.js";
 import { applyTransfer, buildTransfer, decodeTransfer, encodeTransfer } from "./transfer.js";
 import { copyText, download, el, guarded, renderQR, storage, toast } from "./ui.js";
-import { costingLabel, decodeLists, hasLists, hoursFile, hoursFileName, normaliseLists, officialClient, phaseLabel, tasksFor, weekStart } from "./review-model.js";
+import {
+  costingLabel, decodeLists, hasLists, hoursFile, hoursFileName, isRetiredOrder, normaliseLists, officialClient, officialCustomer, optimizationCustomers,
+  ordersFor, phaseLabel, tasksFor, weekStart,
+} from "./review-model.js";
 
 const STATE_KEY = "billable.v1";
 const SYNC_KEY = "billable.sync"; // only read to delete it when sync is off
@@ -27,6 +30,7 @@ const TIMELINE_OPEN_KEY = "billable.timeline-open"; // the timeline starts open
 const SNOOZE_KEY = "billable.nudge-snooze"; // session id -> time until which its nudge stays quiet
 const COPIED_KEY = "billable.sheet-copied"; // day -> { client id: what was copied }, for the ticks
 const LISTS_KEY = "billable.lists"; // official names from the reviewer's link; this device only
+const ADD_MODE_KEY = "billable.add-optimization"; // the add box's slider; this device only
 const BUILD = document.querySelector('meta[name="build"]').content;
 const TRANSFER_MAX = 1400; // link characters; beyond this a QR code is hard to scan off a screen
 
@@ -54,6 +58,7 @@ let state = loadState();
 let lists = loadLists();
 let viewDay = dayKey(Date.now());
 let saveWarned = false;
+let addOptimization = storage.get(ADD_MODE_KEY) === "1";
 
 // The Costing section column gets the official category names, once there are any.
 const costing = (key) => costingLabel(lists, key);
@@ -93,25 +98,34 @@ function requestPersist() {
 
 /* ---------- actions ---------- */
 
+// The add box's slider decides which list a name is checked against, and which
+// side the card lands on. A client has one card, so adding one from the other
+// side switches the card it already has.
 function addClient(name) {
   name = name.trim().slice(0, 80);
   if (!name) return;
-  if (lists.clients.length) {
-    const official = officialClient(lists, name);
+  if (addOptimization ? optimizationCustomers(lists).length : lists.clients.length) {
+    const official = addOptimization ? officialCustomer(lists, name) : officialClient(lists, name);
     if (official) name = official;
-    else if (!confirm(`"${name}" isn't on the official client list. Add it anyway?`)) return;
+    else if (!confirm(`"${name}" isn't on the official ${addOptimization ? "customer" : "client"} list. Add it anyway?`)) return;
   }
   const same = clientByName(state, name);
-  if (same && !same.archived) return toast(`${same.name} is already in the list.`);
-  if (same) {
+  const onSide = (c) => (c.category === CO_CATEGORY) === addOptimization;
+  if (same && !same.archived && onSide(same)) return toast(`${same.name} is already in the list.`);
+  let card = same;
+  if (same?.archived) {
     // Re-adding a removed client brings it, and its history, back.
     same.archived = false;
     same.updated = Date.now();
     toast(`${same.name} is back.`);
+  } else if (same) {
+    toast(`${same.name} is already in the list, now on ${addOptimization ? "change orders" : "phases"}.`);
   } else {
-    state.clients.push({ id: newId(), name, archived: false, updated: Date.now() });
+    card = { id: newId(), name, archived: false, updated: Date.now() };
+    state.clients.push(card);
   }
-  commit();
+  if (onSide(card)) commit();
+  else setCardSide(card.id, addOptimization);
   requestPersist();
 }
 
@@ -121,13 +135,24 @@ function toggle(clientId) {
 }
 
 // Picking a new category clears the note, which belonged to the old one.
-function setClientTag(clientId, category, note) {
-  state = retagClient(state, clientId, category, note, Date.now(), newId);
+function setClientTag(clientId, category, note, co) {
+  state = retagClient(state, clientId, category, note, Date.now(), newId, co);
   commit();
 }
 
-function setSessionTag(sessionId, category, note) {
-  state = retagSession(state, sessionId, category, note, Date.now());
+function setSessionTag(sessionId, category, note, co) {
+  state = retagSession(state, sessionId, category, note, Date.now(), co);
+  commit();
+}
+
+// Switches a card between phases and change orders, back to what it was last
+// tracking on that side. With nothing to go back to, the card opens to pick it.
+function setCardSide(clientId, onOrder) {
+  const { name } = clientById(state, clientId);
+  const tag = lastTag(state, clientId, onOrder);
+  if (tag.co && isRetiredOrder(lists, name, tag.co)) Object.assign(tag, { co: "", note: "" });
+  state = retagClient(state, clientId, tag.category, tag.note, Date.now(), newId, tag.co);
+  if (onOrder ? !tag.co : !tag.category) setExpanded(clientId, true);
   commit();
 }
 
@@ -139,10 +164,14 @@ const expanded = new Set((() => {
   }
 })());
 
-function toggleExpanded(clientId) {
-  if (expanded.has(clientId)) expanded.delete(clientId);
-  else expanded.add(clientId);
+function setExpanded(clientId, open) {
+  if (open) expanded.add(clientId);
+  else expanded.delete(clientId);
   storage.set(EXPANDED_KEY, JSON.stringify([...expanded]));
+}
+
+function toggleExpanded(clientId) {
+  setExpanded(clientId, !expanded.has(clientId));
   render();
 }
 
@@ -218,8 +247,8 @@ function addEntry(clientId, startHM, endHM) {
   if (startHM === endHM) return toast("Start and end are the same time.");
   const start = atTime(viewDay, startHM);
   if (start > Date.now()) return toast("Start cannot be in the future.");
-  const { category, note } = clientById(state, clientId); // the card's current tag
-  state.sessions.push({ id: newId(), clientId, start, end: endAfter(start, endHM), category, note, updated: Date.now() });
+  const { category, note, co } = clientById(state, clientId); // the card's current tag
+  state.sessions.push({ id: newId(), clientId, start, end: endAfter(start, endHM), category, note, co, updated: Date.now() });
   commit();
   $("entry-start").value = "";
   $("entry-end").value = "";
@@ -342,6 +371,21 @@ async function copyClient(clientId) {
   renderSummary(Date.now());
 }
 
+// The day's change orders, across every card, for the one Optimization sheet.
+const OPTIMIZATION = "optimization";
+async function copyOptimization() {
+  const rows = optimizationRows(state, viewDay, Date.now());
+  if (!rows.length) return;
+  const tsv = toTSV(rows);
+  if (!(await copyText(tsv))) return;
+  toast(state.settings.employee
+    ? `${plural(rows.length, "row", "rows")} copied. Paste into the Optimization sheet.`
+    : `${plural(rows.length, "row", "rows")} copied. Add your name in Settings to fill the Employee column.`);
+  copied[viewDay] = { ...copied[viewDay], [OPTIMIZATION]: tsv };
+  storage.set(COPIED_KEY, JSON.stringify(copied));
+  renderSummary(Date.now());
+}
+
 const COPY_ICON = "M9 9h10v10H9zM5 15V5h10";
 const DONE_ICON = "M5 12.5l4.5 4.5L19 7.5";
 function icon(d) {
@@ -432,15 +476,90 @@ function renderNoteLists() {
   };
   $("note-lists").replaceChildren(
     el("datalist", { id: "official-clients" }, ...options(lists.clients)),
+    el("datalist", { id: "official-customers" }, ...options(optimizationCustomers(lists))),
     ...CATEGORIES.map((cat) => el("datalist", { id: `notes-${cat.key}` }, ...options(notesFor(cat.key)))));
 }
 
-// A category dropdown and a note box. The note only opens once a category is
-// chosen, and suggests what has been typed under that category before.
-function tagControls({ category, note, onCategory, onNote, label }) {
-  const select = el("select", { class: "tag-category", "aria-label": `${label}: category`, onchange: (e) => onCategory(e.target.value) },
+// The two-way slider: phases or change orders on a card, and which list the
+// add box offers.
+function slider(label, left, right, onRight, onPick) {
+  const side = (text, value) => el("button", {
+    type: "button",
+    "aria-pressed": String(onRight === value),
+    onclick: () => { if (onRight !== value) onPick(value); },
+    text,
+  });
+  return el("div", { class: `slider${onRight ? " right" : ""}`, role: "group", "aria-label": label }, side(left, false), side(right, true));
+}
+
+const sideSlider = (label, onOrder, onPick) => slider(`${label}: track against`, "Phases", "COs", onOrder, onPick);
+
+// Cards and entries where "Other" was picked, so the number box opens before
+// anything has been typed in it.
+const typingOrder = new Set();
+
+// Which change order, from the customer's list, or typed when it isn't on it yet.
+// A reviewer can then map a typed number or add it to the list.
+function orderControls({ co, note, customer, label, id, onTag, extra }) {
+  const listed = ordersFor(lists, customer);
+  const typed = !listed.length || typingOrder.has(id) || (!!co && !listed.includes(co));
+  const number = typed ? el("input", {
+    type: "text",
+    class: "tag-order",
+    maxlength: String(MAX_CO),
+    placeholder: "CO-0001",
+    autocomplete: "off",
+    "aria-label": `${label}: change order number`,
+    "data-order": id,
+    onchange: (e) => {
+      typingOrder.delete(id);
+      onTag(CO_CATEGORY, note, e.target.value.trim().toUpperCase());
+    },
+    onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); },
+  }) : null;
+  if (number) number.value = co;
+  const select = listed.length ? el("select", {
+    class: "tag-order",
+    "aria-label": `${label}: change order`,
+    onchange: (e) => {
+      if (e.target.value === "other") {
+        typingOrder.add(id);
+        render();
+        document.querySelector(`[data-order="${CSS.escape(id)}"]`)?.focus();
+        return;
+      }
+      typingOrder.delete(id);
+      // A note belonged to the change order it was written under.
+      onTag(CO_CATEGORY, co ? "" : note, e.target.value);
+    },
+  },
+  el("option", { value: "", text: "Pick a change order" }),
+  ...listed.map((n) => el("option", { value: n, text: n })),
+  el("option", { value: "other", text: "Other (type it)" })) : null;
+  if (select) select.value = typed ? "other" : co;
+  const noteBox = el("input", {
+    type: "text",
+    class: "tag-note",
+    maxlength: "80",
+    placeholder: "Note: what this time was for",
+    list: `notes-${CO_CATEGORY}`,
+    autocomplete: "off",
+    "aria-label": `${label}: note`,
+    onchange: (e) => onTag(CO_CATEGORY, e.target.value, co),
+    onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); },
+  });
+  noteBox.value = note;
+  return el("div", { class: "tag-controls order" }, extra, select, number, noteBox);
+}
+
+// A category dropdown and a note box, or the change order version of them. The
+// note only opens once a category is chosen, and suggests what has been typed
+// under that category before.
+function tagControls({ category, note, co, customer, id, onTag, label, extra = null }) {
+  if (category === CO_CATEGORY) return orderControls({ co: co || "", note, customer, label, id, onTag, extra });
+  const select = el("select", { class: "tag-category", "aria-label": `${label}: category`, onchange: (e) => onTag(e.target.value, "", "") },
     el("option", { value: "", text: "No category" }),
-    ...CATEGORIES.map((c) => el("option", { value: c.key, text: phaseLabel(lists, c.key) })));
+    ...CATEGORIES.filter((c) => c.key !== CO_CATEGORY).map((c) => el("option", { value: c.key, text: phaseLabel(lists, c.key) })));
   select.value = category;
   const input = el("input", {
     type: "text",
@@ -451,11 +570,11 @@ function tagControls({ category, note, onCategory, onNote, label }) {
     list: category ? `notes-${category}` : null,
     autocomplete: "off",
     "aria-label": `${label}: note`,
-    onchange: (e) => onNote(e.target.value),
+    onchange: (e) => onTag(category, e.target.value, ""),
     onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); },
   });
   input.value = note;
-  return el("div", { class: "tag-controls" }, select, input);
+  return el("div", { class: "tag-controls" }, extra, select, input);
 }
 
 function renderLunchNudge(session) {
@@ -541,7 +660,7 @@ function renderTimeline(now) {
   }
   const blocks = t.blocks.map((b) => {
     const c = clientById(state, b.session.clientId);
-    const tag = tagLabel(b.session.category, b.session.note);
+    const tag = tagLabel(b.session.category, b.session.note, b.session.co);
     const running = b.session.end === null;
     const label = `${c.name}${tag ? `, ${tag}` : ""}: ${clock(b.start)} to ${running ? "now" : clock(b.end)} (${fmtHM(b.end - b.start)})`;
     const node = el("button", { type: "button", class: `block${running ? " running" : ""}`, title: label, "aria-label": label, onclick: () => showEntry(b.session.id) });
@@ -597,6 +716,18 @@ function renderHeader(now) {
   document.title = anyRunning ? `● ${fmtHM(total)} · Billable` : "Billable · hours per client";
 }
 
+function renderAddBox() {
+  $("add-side").replaceChildren(slider("What you are adding", "Implementation", "Optimization", addOptimization, (on) => {
+    addOptimization = on;
+    storage.set(ADD_MODE_KEY, on ? "1" : "0");
+    renderAddBox();
+  }));
+  const input = $("client-name");
+  input.setAttribute("list", addOptimization ? "official-customers" : "official-clients");
+  input.placeholder = addOptimization ? "Customer name" : "Client name";
+  input.setAttribute("aria-label", input.placeholder);
+}
+
 function renderClients(now) {
   const today = dayKey(now);
   const per = totalsFor(state, today, now);
@@ -607,12 +738,13 @@ function renderClients(now) {
     const running = runningFor(state, c.id);
     const ms = per.get(c.id) || 0;
     const open = expanded.has(c.id);
-    const tag = tagLabel(c.category, c.note);
+    const onOrder = c.category === CO_CATEGORY;
+    const tag = onOrder && !c.co ? `${tagLabel(c.category, c.note)} · pick a change order` : tagLabel(c.category, c.note, c.co);
     const meta = running
       ? el("div", { class: "client-meta" }, el("span", { class: "pulse", "aria-hidden": "true" }), `Running since ${clock(running.start)}`)
       : el("div", { class: "client-meta", text: ms ? `${fmtHours(hours.get(c.id) || 0)} h today` : "Not started today" });
     const panelId = `more-${c.id}`;
-    return el("li", { class: `client${running ? " running" : ""}${open ? " open" : ""}` },
+    return el("li", { class: `client${running ? " running" : ""}${open ? " open" : ""}${onOrder ? " co" : ""}` },
       el("div", {},
         el("div", { class: "client-name", text: c.name }),
         tag ? el("div", { class: "client-tag", title: "Time on this card goes to", text: tag }) : null,
@@ -634,15 +766,18 @@ function renderClients(now) {
           onclick: () => toggleExpanded(c.id),
           text: open ? "Less" : "More",
         }),
+        sideSlider(c.name, onOrder, (on) => setCardSide(c.id, on)),
         el("button", { type: "button", class: "btn", onclick: () => renameClient(c.id), text: "Rename" }),
         el("button", { type: "button", class: "btn", onclick: () => archiveClient(c.id), text: "Remove" })),
       open ? el("div", { class: "client-more", id: panelId },
         tagControls({
           category: c.category,
           note: c.note,
+          co: c.co,
+          customer: c.name,
+          id: c.id,
           label: c.name,
-          onCategory: (cat) => setClientTag(c.id, cat, ""),
-          onNote: (note) => setClientTag(c.id, c.category, note),
+          onTag: (cat, note, co) => setClientTag(c.id, cat, note, co),
         }),
         el("p", { class: "note", text: running
           ? "Changing these splits the running timer here: time so far keeps the old label."
@@ -683,6 +818,12 @@ function renderSummary(now) {
   // Visible while the panel is minimized; names the day when it is not today.
   const day = viewDay === dayKey(now) ? "" : `${new Date(dayBounds(viewDay)[0]).toLocaleDateString(undefined, { month: "short", day: "numeric" })}: `;
   $("summary-badge").textContent = `${day}${total} h`;
+
+  const optimization = optimizationRows(state, viewDay, now);
+  const done = optimization.length > 0 && copied[viewDay]?.[OPTIMIZATION] === toTSV(optimization);
+  $("co-copy-row").hidden = !optimization.length;
+  $("co-copy").classList.toggle("done", done);
+  $("co-copy").textContent = done ? "Optimization copied. Copy again" : `Copy all Optimization (${plural(optimization.length, "row", "rows")})`;
 }
 
 function renderLog(now) {
@@ -711,9 +852,12 @@ function renderLog(now) {
       tagging ? tagControls({
         category: s.category,
         note: s.note,
+        co: s.co,
+        customer: c.name,
+        id: s.id,
         label: `${c.name} entry at ${clock(s.start)}`,
-        onCategory: (cat) => setSessionTag(s.id, cat, ""),
-        onNote: (note) => setSessionTag(s.id, s.category, note),
+        onTag: (cat, note, co) => setSessionTag(s.id, cat, note, co),
+        extra: sideSlider(`${c.name} entry at ${clock(s.start)}`, s.category === CO_CATEGORY, (on) => setSessionTag(s.id, on ? CO_CATEGORY : "", "", "")),
       }) : null);
   }));
 
@@ -725,6 +869,17 @@ function renderLog(now) {
   if (activeClients(state).some((c) => c.id === keep)) select.value = keep;
 }
 
+// "2 clients, 1 existing customer, 3 change orders and 4 tasks", leaving out
+// the change order parts for lists without them.
+function listsCounts(l) {
+  const tasks = new Set(Object.values(l.tasks).flat().map((t) => t.toLowerCase())).size;
+  const orders = l.orders.filter((o) => !o.retired).length;
+  const parts = [plural(l.clients.length, "client", "clients")];
+  if (l.customers.length) parts.push(plural(l.customers.length, "existing customer", "existing customers"));
+  if (orders) parts.push(plural(orders, "change order", "change orders"));
+  return `${parts.join(", ")} and ${plural(tasks, "task", "tasks")}`;
+}
+
 function renderSettings() {
   $("allow-overlap").checked = state.settings.allowOverlap;
   $("lunch-stop").checked = state.settings.lunchStop;
@@ -734,8 +889,7 @@ function renderSettings() {
   if (document.activeElement !== $("employee")) $("employee").value = state.settings.employee;
   $("lists-wrap").hidden = !hasLists(lists);
   if (hasLists(lists)) {
-    const tasks = new Set(Object.values(lists.tasks).flat().map((t) => t.toLowerCase())).size;
-    $("lists-note").textContent = `${plural(lists.clients.length, "client", "clients")} and ${plural(tasks, "task", "tasks")}` +
+    $("lists-note").textContent = listsCounts(lists) +
       `${lists.by ? ` from ${lists.by}` : ""}${lists.updated ? `, updated ${new Date(lists.updated).toLocaleDateString()}` : ""}. ` +
       "They are suggested as you type, and a client not on the list asks before it is added.";
   }
@@ -779,6 +933,7 @@ function renderTip() {
 function render() {
   const now = Date.now();
   renderNoteLists();
+  renderAddBox();
   renderNudges(now);
   renderHeader(now);
   renderTimeline(now);
@@ -858,9 +1013,8 @@ async function handleListsLink(h) {
   } catch {
     return toast("That lists link is damaged or incomplete.");
   }
-  const tasks = new Set(Object.values(next.tasks).flat().map((t) => t.toLowerCase())).size;
   const from = next.by ? ` from ${next.by}` : "";
-  if (!confirm(`Use the official lists${from}: ${plural(next.clients.length, "client", "clients")} and ${plural(tasks, "task", "tasks")}? Your own clients and hours stay as they are.`)) return;
+  if (!confirm(`Use the official lists${from}: ${listsCounts(next)}? Your own clients and hours stay as they are.`)) return;
   if (!storage.set(LISTS_KEY, JSON.stringify(next))) return toast("Couldn't save the lists: browser storage is full or blocked.");
   lists = next;
   render();
@@ -891,6 +1045,7 @@ $("email-btn").addEventListener("click", () => {
   location.href = `mailto:${to}?subject=${subject}&body=${encodeURIComponent(summaryText(state, viewDay, Date.now()))}`;
 });
 $("copy-btn").addEventListener("click", () => copyText(summaryText(state, viewDay, Date.now()), "Summary"));
+$("co-copy").addEventListener("click", copyOptimization);
 for (const r of document.querySelectorAll('input[name="sheet-layout"]')) {
   r.addEventListener("change", (e) => {
     setSetting("sheetLayout", e.target.value);

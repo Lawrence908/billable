@@ -4,10 +4,11 @@
 // no network requests: files come in through the file picker, and everything
 // stays in this browser's storage.
 
-import { CATEGORIES, dayKey, fmtHours, shiftDay } from "./model.js";
+import { CATEGORIES, CO_CATEGORY, dayKey, fmtHours, shiftDay } from "./model.js";
 import {
-  addHoursFile, addOfficialClient, addOfficialTask, clientTSV, compile, detailCSV, encodeLists, handoffText, normaliseLists, normaliseReview, parseHoursFile, parseList,
-  phaseLabel, removePerson, reviewGrid, reviewedFor, setAlias, setBilling, setReviewed, setTaskAlias, totalsCSV, weekStart,
+  addHoursFile, addOfficialClient, addOfficialCustomer, addOfficialTask, addOrder, clientTSV, compile, detailCSV, encodeLists, handoffText, normaliseLists, normaliseReview,
+  optimizationCustomers, optimizationTSV, parseHoursFile, parseList, phaseLabel, removeOrder, removePerson, reviewGrid, reviewedFor, setAlias, setBilling, setOrderAlias,
+  setOrderRetired, setReviewed, setTaskAlias, totalsCSV, weekStart,
 } from "./review-model.js";
 import { copyText, download, el, guarded, renderQR, storage, toast } from "./ui.js";
 
@@ -105,7 +106,10 @@ function render() {
   renderBilling(all);
   renderGlance(c);
   if (document.activeElement !== $("ar-email")) $("ar-email").value = review.arEmail;
-  $("lists-badge").textContent = review.lists.clients.length ? plural(review.lists.clients.length, "client", "clients") : "None yet";
+  const { clients, customers, orders } = review.lists;
+  $("lists-badge").textContent = clients.length || customers.length || orders.length
+    ? `${plural(clients.length, "client", "clients")}, ${plural(customers.length, "customer", "customers")}, ${plural(orders.filter((o) => !o.retired).length, "CO", "COs")}`
+    : "None yet";
 }
 
 function renderPeople(c) {
@@ -158,6 +162,22 @@ function renderChecks(c) {
         : null,
       addButton(`Add ${u.name} to the official clients`, () => changeLists((r) => addOfficialClient(r, u.name, Date.now())))));
   }
+  for (const u of checks.unknownCustomers) {
+    const known = optimizationCustomers(review.lists);
+    items.push(el("li", {},
+      el("span", { text: `"${u.name}" isn't on the customer lists, for change orders (${fmtHours(u.hours)} h from ${u.people.join(", ")}).` }),
+      known.length ? mapSelect(`Official name for ${u.name}`, "Map to a customer...", known, (v) => commit(setAlias(review, u.name, v))) : null,
+      addButton(`Add ${u.name} to the existing customers`, () => changeLists((r) => addOfficialCustomer(r, u.name, Date.now())))));
+  }
+  for (const o of checks.otherOrders) {
+    items.push(el("li", {},
+      el("span", { text: `${o.customer}: "${o.number}" isn't on their change orders (${fmtHours(o.hours)} h from ${o.people.join(", ")}).` }),
+      o.orders.length ? mapSelect(`Listed change order for ${o.number}`, "Map to a change order...", o.orders, (v) => commit(setOrderAlias(review, o.customer, o.number, v))) : null,
+      addButton(`Add ${o.number} to ${o.customer}'s change orders`, () => changeLists((r) => addOrder(r, o.customer, o.number, Date.now())))));
+  }
+  for (const n of checks.noOrder) {
+    items.push(el("li", {}, el("span", { text: `${n.employee} has ${fmtHours(n.hours)} h on ${n.client} with no change order number.` })));
+  }
   for (const t of checks.otherTasks) {
     items.push(el("li", {},
       el("span", { text: `${t.label}: "${t.note || "no task"}" isn't on the task list (${fmtHours(t.hours)} h from ${t.people.join(", ")}).` }),
@@ -184,6 +204,12 @@ function renderChecks(c) {
     items.push(el("li", { class: "muted" },
       el("span", { text: `Counting "${typed}" under ${phaseLabel(review.lists, category)} as ${official}.` }),
       el("button", { type: "button", class: "btn btn-small", text: "Undo", onclick: () => commit(setTaskAlias(review, category, typed, "")) })));
+  }
+  for (const [key, official] of Object.entries(review.orderAliases)) {
+    const [customer, typed] = key.split("\u0000");
+    items.push(el("li", { class: "muted" },
+      el("span", { text: `Counting "${typed}" for ${customer} as ${official}.` }),
+      el("button", { type: "button", class: "btn btn-small", text: "Undo", onclick: () => commit(setOrderAlias(review, customer, typed, "")) })));
   }
   const problems = items.filter((li) => !li.classList.contains("muted")).length;
   $("checks-badge").textContent = problems ? plural(problems, "thing to check", "things to check") : "All clear";
@@ -309,7 +335,7 @@ function renderGrid(g, ticks, c) {
     const name = target
       ? el("button", { type: "button", class: "link", text: rowLabel(rk), onclick: () => go(target) })
       : el("span", { text: rowLabel(rk) });
-    const unofficial = level1 && !c.rows.find((x) => x.client === rk)?.officialClient;
+    const unofficial = level1 && c.rows.some((x) => x.client === rk && !x.officialClient);
     // On the top level the row heading also holds the Reviewed tick and the
     // copy button, so they stay in view however far the grid scrolls.
     const header = level1
@@ -318,10 +344,11 @@ function renderGrid(g, ticks, c) {
           el("input", { type: "checkbox", checked: !!ticks[rk], onchange: (e) => commit(setReviewed(review, review.period.from, review.period.to, rk, e.target.checked)) }),
           el("span", { class: "visually-hidden", text: `${rk} reviewed` })),
         name,
-        el("button", {
+        // Change orders copy together under Hand off, so a customer with only those has nothing here.
+        c.rows.some((x) => x.client === rk && x.category !== CO_CATEGORY) ? el("button", {
           type: "button", class: "btn btn-small copy-mini", text: "Copy", "aria-label": `Copy ${rk}'s rows for the timesheet`,
           onclick: () => copyText(clientTSV(c, rk), `${rk}'s rows`),
-        })))
+        }) : null))
       : el("th", { scope: "row" }, name);
     return el("tr", {},
       header,
@@ -427,7 +454,7 @@ function renderBilling(all) {
     ...CATEGORIES.map((c) => box(phaseLabel(review.lists, c.key), "categories", c.key)),
     box("No category", "categories", ""));
   const seen = new Map();
-  for (const n of [...review.lists.clients, ...all.clients.map((x) => x.name), ...billing.clients]) if (!seen.has(n.toLowerCase())) seen.set(n.toLowerCase(), n);
+  for (const n of [...review.lists.clients, ...review.lists.customers, ...all.clients.map((x) => x.name), ...billing.clients]) if (!seen.has(n.toLowerCase())) seen.set(n.toLowerCase(), n);
   $("billing-clients").replaceChildren(...[...seen.values()].sort((a, b) => a.localeCompare(b)).map((n) => box(n, "clients", n)));
   const count = billing.categories.length + billing.clients.length;
   $("billing-badge").textContent = count ? `${count} not billed` : "Everything billed";
@@ -448,6 +475,8 @@ function renderListsEditor() {
   const { lists } = review;
   $("lists-by").value = lists.by;
   $("lists-clients").value = lists.clients.join("\n");
+  $("lists-customers").value = lists.customers.join("\n");
+  renderOrders();
   $("lists-phases").replaceChildren(...CATEGORIES.map((c) => el("label", { class: "field" },
     el("span", { class: "label", text: c.label }),
     el("input", { type: "text", maxlength: "80", "data-phase": c.key, value: lists.phases[c.key] || "", placeholder: "As in the Sheet (optional)" }))));
@@ -459,12 +488,38 @@ function renderListsEditor() {
   }));
 }
 
+// Change orders save as soon as they change: nobody should approve one and
+// lose it to an unsaved page. The customer dropdown follows the two lists above
+// it as they are being typed.
+function renderOrders() {
+  const select = $("order-customer");
+  const keep = select.value;
+  const names = optimizationCustomers({ clients: parseList($("lists-clients").value), customers: parseList($("lists-customers").value) });
+  select.replaceChildren(el("option", { value: "", text: "Customer..." }), ...names.map((n) => el("option", { value: n, text: n })));
+  if (names.includes(keep)) select.value = keep;
+  const sorted = [...review.lists.orders].sort((a, b) => a.customer.localeCompare(b.customer) || a.number.localeCompare(b.number, undefined, { numeric: true }));
+  const tools = (o) => [
+    el("button", {
+      type: "button", class: "btn btn-small", text: o.retired ? "Bring back" : "Retire",
+      "aria-label": `${o.retired ? "Bring back" : "Retire"} ${o.number} for ${o.customer}`,
+      onclick: () => changeLists((r) => setOrderRetired(r, o.customer, o.number, !o.retired, Date.now())),
+    }),
+    el("button", {
+      type: "button", class: "btn btn-small btn-danger", text: "✕",
+      "aria-label": `Delete ${o.number} for ${o.customer}`,
+      onclick: () => { if (confirm(`Delete ${o.number} for ${o.customer}? To stop people picking a finished one, use Retire: this is for mistakes.`)) changeLists((r) => removeOrder(r, o.customer, o.number, Date.now())); },
+    }),
+  ];
+  $("lists-orders").replaceChildren(...sorted.map((o) => el("li", { class: o.retired ? "muted" : "" },
+    el("span", { text: `${o.customer} · ${o.number}${o.retired ? " (retired)" : ""}` }), ...tools(o))));
+}
+
 function readListsEditor() {
   const phases = {};
   for (const input of document.querySelectorAll("[data-phase]")) phases[input.dataset.phase] = input.value;
   const tasks = {};
   for (const area of document.querySelectorAll("[data-tasks]")) tasks[area.dataset.tasks] = parseList(area.value);
-  return normaliseLists({ clients: parseList($("lists-clients").value), phases, tasks, by: $("lists-by").value, updated: Date.now() });
+  return normaliseLists({ clients: parseList($("lists-clients").value), customers: parseList($("lists-customers").value), orders: review.lists.orders, phases, tasks, by: $("lists-by").value, updated: Date.now() });
 }
 
 function saveLists() {
@@ -515,7 +570,7 @@ $("unreviewed-only").addEventListener("change", (e) => { ui.unreviewedOnly = e.t
 $("client-search").addEventListener("input", (e) => { ui.search = e.target.value; ui.sel = null; render(); });
 
 $("ar-email").addEventListener("change", (e) => commit({ ...review, arEmail: e.target.value.trim().slice(0, 200) }));
-const summary = () => handoffText(compiled(), review.lists);
+const summary = () => handoffText(compiled());
 $("email-btn").addEventListener("click", () => {
   const to = review.arEmail.split(/[,;\s]+/).filter(Boolean).map(encodeURIComponent).join(",");
   const subject = encodeURIComponent(`Billable hours ${review.period.from} to ${review.period.to}`);
@@ -527,6 +582,25 @@ $("detail-csv").addEventListener("click", () =>
   download(`billable-lines-${period()}.csv`, detailCSV(compiled()), "text/csv"));
 $("totals-csv").addEventListener("click", () =>
   download(`billable-totals-${period()}.csv`, totalsCSV(compiled()), "text/csv"));
+
+$("co-tsv").addEventListener("click", () => {
+  const tsv = optimizationTSV(compiled());
+  if (tsv) copyText(tsv, "Optimization rows");
+  else toast("No change order hours in this period.");
+});
+
+for (const id of ["lists-clients", "lists-customers"]) $(id).addEventListener("input", renderOrders);
+$("order-add").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const customer = $("order-customer").value;
+  const number = $("order-number").value.trim().toUpperCase();
+  if (!customer || !number) return toast("Pick a customer and type the change order number.");
+  changeLists((r) => addOrder(r, customer, number, Date.now()));
+  $("order-number").value = "";
+  $("order-customer").value = customer;
+  $("order-number").focus();
+  toast(`${number} added for ${customer}. Send staff the link so they get it.`);
+});
 
 $("lists-save").addEventListener("click", () => {
   saveLists();

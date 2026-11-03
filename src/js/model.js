@@ -24,14 +24,26 @@ export const CATEGORIES = [
 ];
 const CATEGORY_KEYS = new Set(CATEGORIES.map((c) => c.key));
 
-export const categoryLabel = (key) => CATEGORIES.find((c) => c.key === key)?.label || "";
-export const tagLabel = (category, note) =>
-  !category ? "" : note ? `${categoryLabel(category)} · ${note}` : categoryLabel(category);
+// Work under a change order is tagged with its number instead of a phase, and
+// goes on the timesheet's one Optimization sheet rather than the client's tab.
+export const CO_CATEGORY = "change";
+export const MAX_CO = 40;
 
-function cleanTag(category, note) {
+export const categoryLabel = (key) => CATEGORIES.find((c) => c.key === key)?.label || "";
+export const tagLabel = (category, note, co) =>
+  !category ? "" : [co || categoryLabel(category), note].filter(Boolean).join(" · ");
+
+function cleanTag(category, note, co) {
   const cat = CATEGORY_KEYS.has(category) ? category : "";
-  return { category: cat, note: cat ? String(note || "").trim().slice(0, 80) : "" };
+  return {
+    category: cat,
+    note: cat ? String(note || "").trim().slice(0, 80) : "",
+    co: cat === CO_CATEGORY ? String(co || "").trim().slice(0, MAX_CO) : "",
+  };
 }
+
+// Stored only when there is one, so data without change orders serialises as it always has.
+const storedTag = ({ co, ...tag }) => (co ? { ...tag, co } : tag);
 
 // Time-prefixed, so sorting by id lists clients in the order they were added.
 export function newId(now = Date.now()) {
@@ -73,7 +85,7 @@ export function normalise(d) {
     else if (typeof c.name === "string") {
       // category/note on a client is the card's current selection: what the
       // next timer started on it is tagged with.
-      out.clients.push({ id: c.id, name: c.name.slice(0, 80), archived: !!c.archived, ...cleanTag(c.category, c.note), updated: when(c.updated) });
+      out.clients.push({ id: c.id, name: c.name.slice(0, 80), archived: !!c.archived, ...storedTag(cleanTag(c.category, c.note, c.co)), updated: when(c.updated) });
     }
   }
   for (const s of Array.isArray(d.sessions) ? d.sessions : []) {
@@ -89,7 +101,7 @@ export function normalise(d) {
     // whose clock is behind the one that started it. Keep the entry, at zero.
     const end = s.end === null ? null : Math.max(s.end, s.start);
     const lunch = LUNCH_MARKS.includes(s.lunch) ? { lunch: s.lunch } : {};
-    out.sessions.push({ id: s.id, clientId, start: s.start, end, ...cleanTag(s.category, s.note), ...lunch, updated: when(s.updated) });
+    out.sessions.push({ id: s.id, clientId, start: s.start, end, ...storedTag(cleanTag(s.category, s.note, s.co)), ...lunch, updated: when(s.updated) });
   }
   out.clients.sort(byId);
   out.sessions.sort(byId);
@@ -232,16 +244,17 @@ export function summaryRows(st, key, now) {
     if (ms === null) continue;
     if (!perClient.has(s.clientId)) perClient.set(s.clientId, new Map());
     const lines = perClient.get(s.clientId);
-    const k = `${s.category}\u0000${s.note.toLowerCase()}`;
-    if (!lines.has(k)) lines.set(k, { category: s.category, note: s.note, ms: 0 });
+    const co = s.co || "";
+    const k = `${s.category}\u0000${co.toLowerCase()}\u0000${s.note.toLowerCase()}`;
+    if (!lines.has(k)) lines.set(k, { category: s.category, co, note: s.note, ms: 0 });
     lines.get(k).ms += ms;
   }
   return existingClients(st)
     .filter((c) => perClient.has(c.id))
     .map((c) => {
       const lines = [...perClient.get(c.id).values()]
-        .map((l) => ({ ...l, label: tagLabel(l.category, l.note) || "No category", hours: roundQuarter(l.ms) }))
-        .sort((a, b) => categoryOrder(a.category) - categoryOrder(b.category) || a.note.localeCompare(b.note));
+        .map((l) => ({ ...l, label: tagLabel(l.category, l.note, l.co) || "No category", hours: roundQuarter(l.ms) }))
+        .sort((a, b) => categoryOrder(a.category) - categoryOrder(b.category) || a.co.localeCompare(b.co) || a.note.localeCompare(b.note));
       return {
         client: c,
         ms: lines.reduce((a, l) => a + l.ms, 0),
@@ -270,33 +283,47 @@ export function csvFor(st, key, now) {
   // A leading = + - @ makes spreadsheets run the cell as a formula, and names
   // can arrive from an imported link or backup, so neutralise them.
   const quote = (v) => `"${String(v).replace(/^[=+\-@\t\r]/, "'$&").replace(/"/g, '""')}"`;
-  const out = ["date,client,category,note,tracked_hours,hours"];
+  const out = ["date,client,category,change_order,note,tracked_hours,hours"];
   for (const r of summaryRows(st, key, now)) {
     for (const l of r.lines) {
-      out.push([key, quote(r.client.name), quote(categoryLabel(l.category)), quote(l.note), (l.ms / HOUR).toFixed(2), fmtHours(l.hours)].join(","));
+      out.push([key, quote(r.client.name), quote(categoryLabel(l.category)), quote(l.co), quote(l.note), (l.ms / HOUR).toFixed(2), fmtHours(l.hours)].join(","));
     }
   }
   return out.join("\r\n") + "\r\n";
 }
 
+const sheetDate = (key) => {
+  const [y, m, d] = key.split("-");
+  return `${m}/${d}/${y}`;
+};
+
 // Rows for one client, for pasting into that client's tab of the work Google
 // Sheet: tab-separated, so each value lands in its own column. Lines that
 // round to zero hours are left out. Notes is only the note: the category is
 // either its own Costing section column (all five columns) or picked by hand
-// in the sheet after pasting (Notes and Hours).
+// in the sheet after pasting (Notes and Hours). Change orders are left out:
+// they go on their own sheet, with optimizationRows.
 // `costing` names a category for the Costing section column; the app passes
 // the official names when it has the reviewer's lists.
 export function sheetRows(st, key, now, clientId, costing = categoryLabel) {
   const { sheetLayout, employee } = st.settings;
-  const [y, m, d] = key.split("-");
-  const date = `${m}/${d}/${y}`;
+  const date = sheetDate(key);
   const row = summaryRows(st, key, now).find((r) => r.client.id === clientId);
   if (!row) return [];
   return row.lines
-    .filter((l) => l.hours)
+    .filter((l) => l.hours && l.category !== CO_CATEGORY)
     .map((l) => sheetLayout === "all"
       ? [date, employee, costing(l.category), l.note, fmtHours(l.hours)]
       : [l.note, fmtHours(l.hours)]);
+}
+
+// A day's change order rows across every client, for the one Optimization
+// sheet: Date | Employee | Customer | Costing section (the CO) | Notes | Hours.
+export function optimizationRows(st, key, now) {
+  const date = sheetDate(key);
+  return summaryRows(st, key, now).flatMap((r) => r.lines
+    .filter((l) => l.hours && l.category === CO_CATEGORY)
+    .map((l) => [date, st.settings.employee, r.client.name, l.co, l.note, fmtHours(l.hours)]));
 }
 
 // Sheets treats a pasted cell starting with = + - @ as a formula; a leading
@@ -376,7 +403,7 @@ export function lunchBreak(st, now) {
       const byHand = live.some((x) => x.start >= noon && x.start < now);
       if (byHand || running.some((x) => x.clientId === s.clientId) || (!allowOverlap && running.length)) continue;
       // The id is derived, not random, so two devices making this restart make the same entry.
-      const r = { id: start.toString(36) + s.id.slice(-10), clientId: s.clientId, start, end: null, category: s.category, note: s.note, lunch: "restarted", updated: now };
+      const r = { id: start.toString(36) + s.id.slice(-10), clientId: s.clientId, start, end: null, category: s.category, note: s.note, ...(s.co ? { co: s.co } : {}), lunch: "restarted", updated: now };
       out.sessions.push(r);
       restarted.push(r);
     }
@@ -454,8 +481,8 @@ export function toggleTimer(st, clientId, now, makeId) {
   if (!out.settings.allowOverlap) {
     for (const s of existingSessions(out)) if (s.end === null) stopAt(s, now);
   }
-  const { category, note } = clientById(out, clientId);
-  out.sessions.push({ id: makeId(now), clientId, start: now, end: null, category, note, updated: now });
+  const { category, note, co } = clientById(out, clientId);
+  out.sessions.push({ id: makeId(now), clientId, start: now, end: null, category, note, co, updated: now });
   return normalise(out);
 }
 
@@ -463,13 +490,13 @@ export function toggleTimer(st, clientId, now, makeId) {
 // running entry instead of splitting off a near-empty one.
 export const RETAG_GRACE = MINUTE;
 
-// Changes a card's category/note. A running timer is split at `now`, so the
-// time so far stays with the old tag and the rest goes to the new one.
-export function retagClient(st, clientId, category, note, now, makeId) {
+// Changes a card's category/note/change order. A running timer is split at
+// `now`, so the time so far stays with the old tag and the rest goes to the new one.
+export function retagClient(st, clientId, category, note, now, makeId, co = "") {
   const out = normalise(st);
   const c = clientById(out, clientId);
-  const tag = cleanTag(category, note);
-  if (c.category === tag.category && c.note === tag.note) return out;
+  const tag = cleanTag(category, note, co);
+  if (c.category === tag.category && c.note === tag.note && (c.co || "") === tag.co) return out;
   Object.assign(c, tag, { updated: now });
   const running = runningFor(out, clientId);
   if (running && now - running.start < RETAG_GRACE) {
@@ -482,11 +509,20 @@ export function retagClient(st, clientId, category, note, now, makeId) {
 }
 
 // Fixes the tag on a past entry, for when switching was forgotten.
-export function retagSession(st, sessionId, category, note, now) {
+export function retagSession(st, sessionId, category, note, now, co = "") {
   const out = normalise(st);
   const s = existingSessions(out).find((x) => x.id === sessionId);
-  if (s) Object.assign(s, cleanTag(category, note), { updated: now });
+  if (s) Object.assign(s, cleanTag(category, note, co), { updated: now });
   return normalise(out);
+}
+
+// What a card goes back to when it is switched between phases and change
+// orders: what this client was last tracked as on that side, else nothing yet.
+export function lastTag(st, clientId, onChangeOrder) {
+  const last = existingSessions(st)
+    .filter((s) => s.clientId === clientId && s.category && (s.category === CO_CATEGORY) === onChangeOrder)
+    .sort((a, b) => b.start - a.start)[0];
+  return cleanTag(last?.category || (onChangeOrder ? CO_CATEGORY : ""), last?.note, last?.co);
 }
 
 /* ---------- merge ---------- */

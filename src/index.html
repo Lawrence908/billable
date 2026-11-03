@@ -69,11 +69,12 @@
 
   <section aria-labelledby="clients-h">
     <h2 id="clients-h" class="section-h">Clients</h2>
+    <div id="add-side" class="add-side"></div>
     <form id="add-client" class="add-client" autocomplete="off">
       <input id="client-name" name="name" type="text" placeholder="Client name" maxlength="80" required aria-label="Client name" list="official-clients">
       <button type="submit" class="btn btn-primary">Add</button>
     </form>
-    <p class="empty" id="clients-empty">Type a client name and press Add. Each client gets its own start and stop button, and stays here for tomorrow.</p>
+    <p class="empty" id="clients-empty">Type a client name and press Add. Each client gets its own start and stop button, and stays here for tomorrow. Use the slider to add a customer for a change order instead; any card can switch between phases and change orders.</p>
     <ul class="clients" id="clients"></ul>
   </section>
 
@@ -103,6 +104,10 @@
       <tfoot><tr><th>Total</th><th class="num" id="sum-exact">0:00</th><th class="num" id="sum-rounded">0.00</th><th></th></tr></tfoot>
     </table>
     <p class="note">Each line's time for the day is added up, then rounded to the nearest 0.25 h. A client tracked with categories gets one line per category and note.</p>
+    <div class="send-row" id="co-copy-row" hidden>
+      <button type="button" class="btn" id="co-copy"></button>
+      <p class="note">Change orders all go on one sheet: click its first empty Date cell and paste. A client's own copy button leaves them out.</p>
+    </div>
 
     <div class="send">
       <p class="note" id="sheet-note"></p>

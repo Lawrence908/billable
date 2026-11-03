@@ -7,7 +7,7 @@
 //   b  base minute (epoch minutes) that session offsets count from
 //   s  sessions as [client index, start offset in minutes, duration in
 //      minutes or -1 while running, and when tagged: category index into
-//      CATEGORIES, note index into n or -1]
+//      CATEGORIES, note index into n or -1, then any change order number]
 //   n  distinct notes, so a note used many times is carried once
 // deflated (deflate-raw) and base64url-encoded.
 
@@ -33,7 +33,7 @@ export function buildTransfer(st, now, days) {
     n: notes,
     s: sessions.map((s) => {
       const row = [index.get(s.clientId), Math.floor(s.start / MINUTE) - base, s.end === null ? -1 : Math.round((s.end - s.start) / MINUTE)];
-      if (s.category) row.push(CATEGORIES.findIndex((c) => c.key === s.category), s.note ? notes.indexOf(s.note) : -1);
+      if (s.category) row.push(CATEGORIES.findIndex((c) => c.key === s.category), s.note ? notes.indexOf(s.note) : -1, ...(s.co ? [s.co] : []));
       return row;
     }),
   };
@@ -64,12 +64,13 @@ export async function decodeTransfer(text) {
     // Indexes refer to the original list, so validate against it before filtering names.
     sessions: p.s
       .filter((x) => Array.isArray(x) && int(x[0]) && names[x[0]] && int(x[1]) && int(x[2]) && x[2] >= -1)
-      .map(([ci, offset, minutes, cat, note]) => ({
+      .map(([ci, offset, minutes, cat, note, co]) => ({
         name: names[ci],
         offset,
         minutes,
         category: CATEGORIES[cat]?.key || "",
         note: notes[note] || "",
+        co: typeof co === "string" ? co : "",
       })),
   };
 }
@@ -91,12 +92,12 @@ export function applyTransfer(st, transfer, now, makeId) {
       c.updated = now;
     }
   }
-  for (const { name, offset, minutes, category, note } of transfer.sessions) {
+  for (const { name, offset, minutes, category, note, co } of transfer.sessions) {
     const clientId = clientByName(out, name).id;
     const minute = transfer.base + offset;
     if (existingSessions(out).some((s) => s.clientId === clientId && Math.floor(s.start / MINUTE) === minute)) continue;
     const start = minute * MINUTE;
-    out.sessions.push({ id: makeId(), clientId, start, end: minutes < 0 ? null : start + minutes * MINUTE, category, note, updated: now });
+    out.sessions.push({ id: makeId(), clientId, start, end: minutes < 0 ? null : start + minutes * MINUTE, category, note, co, updated: now });
     addedSessions++;
   }
   return { state: settleRunning(out), addedClients, addedSessions };

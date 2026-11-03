@@ -11,7 +11,7 @@ import {
   CATEGORIES, atTime, clock, csvFor, dayBounds, dayKey, endAfter, existingSessions, fmtHM, merge, normalise,
   noteSuggestions, pruneTombstones, retagClient, retagSession, roundQuarter, sameData, settleRunning, shiftDay,
   summaryRows, summaryText, toggleTimer, totalsFor, sheetRows, toTSV, timerNudges, timelineFor, LONG_RUN,
-  lunchBreak, lunchRestarts,
+  lunchBreak, lunchRestarts, lastTag, optimizationRows, tagLabel,
 } from "../src/js/model.js";
 
 const MIN = 60e3;
@@ -88,7 +88,7 @@ test("summary rounds per client and totals the rounded figures", () => {
   assert.match(text, /Acme: 2\.25 h/);
   assert.match(text, /Northwind: 0\.25 h/);
   assert.match(text, /Total: 2\.50 h/);
-  assert.equal(csvFor(st, k, 0).split("\r\n")[1], `${k},"Acme","","",2.17,2.25`);
+  assert.equal(csvFor(st, k, 0).split("\r\n")[1], `${k},"Acme","","","",2.17,2.25`);
 });
 
 test("CSV neutralises names a spreadsheet would run as a formula", () => {
@@ -131,7 +131,7 @@ test("merge collapses same-named clients into the oldest one", () => {
 test("CSV quotes client names that contain quotes and commas", () => {
   const k = "2026-10-15";
   const st = day([["a", 'Smith, "Jr" & Co']], [["1", "a", at(k, "08:00"), at(k, "09:00")]]);
-  assert.equal(csvFor(st, k, 0).split("\r\n")[1], `${k},"Smith, ""Jr"" & Co","","",1.00,1.00`);
+  assert.equal(csvFor(st, k, 0).split("\r\n")[1], `${k},"Smith, ""Jr"" & Co","","","",1.00,1.00`);
 });
 
 test("normalise reads the first version's jobs/jobId shape and drops junk", () => {
@@ -286,8 +286,8 @@ test("summary rounds each category + note line once, and the client total sums t
   assert.match(text, /Total: 4\.25 h/);
 
   const csv = csvFor(st, k, 0).trim().split("\r\n");
-  assert.equal(csv[0], "date,client,category,note,tracked_hours,hours");
-  assert.equal(csv[1], `${k},"Acme","P3","Framing review",1.83,1.75`);
+  assert.equal(csv[0], "date,client,category,change_order,note,tracked_hours,hours");
+  assert.equal(csv[1], `${k},"Acme","P3","","Framing review",1.83,1.75`);
   assert.equal(csv.length, 5);
 });
 
@@ -489,4 +489,94 @@ test("the timeline is at least three hours wide, includes a running timer, and c
   const overnight = day([["a", "Acme"]], [["1", "a", at("2026-10-15", "22:00"), at(k, "01:30")]]);
   assert.equal(timelineFor(overnight, k, 0).blocks[0].start, at(k, "00:00"));
   assert.equal(timelineFor(day([["a", "Acme"]], []), k, 0), null);
+});
+
+/* ---------- change orders ---------- */
+
+test("a change order number only exists on change order work, and isn't stored when empty", () => {
+  const st = normalise({
+    clients: [{ id: "a", name: "A", category: "change", co: " CO-0001 ", note: "Rework" }, { id: "b", name: "B", category: "p2", co: "CO-0002" }, { id: "c", name: "C" }],
+    sessions: [{ id: "s", clientId: "a", start: 0, end: 1, category: "change", co: "CO-0001", note: "x" }, { id: "t", clientId: "b", start: 0, end: 1, category: "p2", co: "CO-0002" }],
+  });
+  assert.equal(st.clients[0].co, "CO-0001");
+  assert.ok(!("co" in st.clients[1]));
+  assert.ok(!("co" in st.clients[2]));
+  assert.equal(st.sessions[0].co, "CO-0001");
+  assert.ok(!("co" in st.sessions[1]));
+  assert.deepEqual(normalise(JSON.parse(JSON.stringify(st))), st);
+});
+
+test("tagLabel names the change order instead of the category", () => {
+  assert.equal(tagLabel("change", "Fix Retainage Error", "CO-0001"), "CO-0001 · Fix Retainage Error");
+  assert.equal(tagLabel("change", "", "CO-0001"), "CO-0001");
+  assert.equal(tagLabel("change", "Rework"), "Optimization/Change Order · Rework");
+  assert.equal(tagLabel("p2", "Import"), "P2 · Import");
+});
+
+test("timers carry the card's change order, and changing it splits a running one", () => {
+  const k = "2026-10-15";
+  const ids = (() => { let n = 0; return () => `id${n++}`; })();
+  let st = day([["a", "Acme"]], []);
+  st = retagClient(st, "a", "change", "", at(k, "08:00"), ids, "CO-0001");
+  st = toggleTimer(st, "a", at(k, "09:00"), ids);
+  assert.equal(existingSessions(st)[0].co, "CO-0001");
+  st = retagClient(st, "a", "change", "", at(k, "10:00"), ids, "CO-0002");
+  assert.deepEqual(existingSessions(st).map((s) => [s.co, s.end]), [["CO-0001", at(k, "10:00")], ["CO-0002", null]]);
+  // Back on phases, the number goes.
+  st = retagClient(st, "a", "p3", "", at(k, "11:00"), ids);
+  assert.ok(!("co" in st.clients[0]));
+  assert.ok(!("co" in existingSessions(st).at(-1)));
+  assert.equal(existingSessions(st).at(-1).category, "p3");
+});
+
+test("the same card can hold phases and change orders, on separate lines and copies", () => {
+  const k = "2026-10-15";
+  const st = normalise({
+    clients: [{ id: "a", name: "Acme", updated: 1 }, { id: "b", name: "Beta", updated: 1 }],
+    sessions: [
+      { id: "1", clientId: "a", start: at(k, "08:00"), end: at(k, "09:00"), category: "p2", note: "Import", updated: 1 },
+      { id: "2", clientId: "a", start: at(k, "09:00"), end: at(k, "10:00"), category: "change", co: "CO-0001", note: "Rework", updated: 1 },
+      { id: "3", clientId: "a", start: at(k, "10:00"), end: at(k, "10:30"), category: "change", co: "CO-0002", note: "Rework", updated: 1 },
+      { id: "4", clientId: "b", start: at(k, "13:00"), end: at(k, "14:00"), category: "change", co: "CO-0001", note: "", updated: 1 },
+    ],
+    settings: { employee: "Chris Lawrence", sheetLayout: "all", updated: 1 },
+  });
+  assert.deepEqual(summaryRows(st, k, 0)[0].lines.map((l) => [l.label, l.hours]), [["P2 · Import", 1], ["CO-0001 · Rework", 1], ["CO-0002 · Rework", 0.5]]);
+  assert.deepEqual(sheetRows(st, k, 0, "a"), [["10/15/2026", "Chris Lawrence", "P2", "Import", "1.00"]]);
+  assert.deepEqual(sheetRows(st, k, 0, "b"), []);
+  assert.deepEqual(optimizationRows(st, k, 0), [
+    ["10/15/2026", "Chris Lawrence", "Acme", "CO-0001", "Rework", "1.00"],
+    ["10/15/2026", "Chris Lawrence", "Acme", "CO-0002", "Rework", "0.50"],
+    ["10/15/2026", "Chris Lawrence", "Beta", "CO-0001", "", "1.00"],
+  ]);
+  assert.match(csvFor(st, k, 0), /"Acme","Optimization\/Change Order","CO-0001","Rework",1\.00,1\.00/);
+  assert.match(summaryText(st, k, 0), /CO-0002 · Rework: 0\.50 h/);
+});
+
+test("switching sides goes back to what the card last tracked there", () => {
+  const k = "2026-10-15";
+  const st = normalise({
+    clients: [{ id: "a", name: "Acme", updated: 1 }, { id: "b", name: "Beta", updated: 1 }],
+    sessions: [
+      { id: "1", clientId: "a", start: at(k, "08:00"), end: at(k, "09:00"), category: "p2", note: "Old", updated: 1 },
+      { id: "2", clientId: "a", start: at(k, "09:00"), end: at(k, "10:00"), category: "p3", note: "Import", updated: 1 },
+      { id: "3", clientId: "a", start: at(k, "10:00"), end: at(k, "11:00"), category: "change", co: "CO-0001", note: "Rework", updated: 1 },
+    ],
+  });
+  assert.deepEqual(lastTag(st, "a", false), { category: "p3", note: "Import", co: "" });
+  assert.deepEqual(lastTag(st, "a", true), { category: "change", note: "Rework", co: "CO-0001" });
+  assert.deepEqual(lastTag(st, "b", false), { category: "", note: "", co: "" });
+  assert.deepEqual(lastTag(st, "b", true), { category: "change", note: "", co: "" });
+});
+
+test("lunch restarts a timer on the same change order, and merging keeps it", () => {
+  const k = "2026-10-15"; // a Thursday
+  const st = normalise({
+    clients: [{ id: "a", name: "Acme", category: "change", co: "CO-0001", updated: 1 }],
+    sessions: [{ id: "1aaaaaaaaaaaaaaa", clientId: "a", start: at(k, "09:00"), end: null, category: "change", co: "CO-0001", note: "Rework", updated: 1 }],
+  });
+  const { state } = lunchBreak(st, at(k, "13:05"));
+  const live = existingSessions(state).filter((s) => s.end === null);
+  assert.deepEqual(live.map((s) => [s.co, s.note]), [["CO-0001", "Rework"]]);
+  assert.equal(existingSessions(merge(st, state)).find((s) => s.end === null).co, "CO-0001");
 });
