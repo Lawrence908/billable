@@ -64,6 +64,84 @@ const yesterday = await p.textContent("#sum-rounded");
 const weekend = await p.evaluate(() => [0, 6].includes(new Date(Date.now() - 864e5).getDay()));
 check("the summary has past days", weekend ? yesterday === "0.00" : Number(yesterday) > 5, `${yesterday} h`);
 
+/* ---------- moving the cards ---------- */
+
+await p.click("#day-today");
+const names = (page = p) => page.$$eval(".clients .client-name", (n) => n.map((x) => x.textContent));
+const swap = (list, a, b) => { const out = [...list]; [out[a], out[b]] = [out[b], out[a]]; return out; };
+const nameList = await names();
+check("the first card can't go up, and the last can't go down",
+  await p.isDisabled(".client:first-child [data-move=up]") && await p.isDisabled(".client:last-child [data-move=down]") && await p.isEnabled(".client:first-child [data-move=down]"));
+await p.click(".client:nth-child(2) [data-move=up]");
+const afterArrow = await names();
+check("the up arrow moves a card up", JSON.stringify(afterArrow) === JSON.stringify(swap(nameList, 0, 1)), afterArrow.join(", "));
+check("the arrow keeps the keyboard, at the end of the list too", await p.evaluate(() => document.activeElement?.dataset?.move === "down"));
+await p.keyboard.press("Enter");
+check("a key press moves it back down", JSON.stringify(await names()) === JSON.stringify(nameList));
+check("the move is announced to screen readers", /moved to position 2 of/.test(await p.textContent("#move-status")));
+
+// Holds a drag from the grip of one card to the middle of another.
+async function grab(index) {
+  const box = await p.locator(`.client:nth-child(${index}) .client-grip`).boundingBox();
+  await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await p.mouse.down();
+}
+async function dragOver(index) {
+  const box = await p.locator(`.client:nth-child(${index})`).boundingBox();
+  await p.mouse.move(box.x + box.width / 2, box.y + box.height * 0.8, { steps: 8 });
+}
+await p.evaluate(() => scrollTo(0, 0));
+await grab(1);
+await dragOver(3);
+// The app redraws every minute, and a drag must survive it.
+await p.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+check("a redraw leaves a card being dragged alone", await p.locator(".client.dragging").count() === 1);
+await p.keyboard.press("Escape");
+await p.mouse.up();
+check("Esc cancels a drag", JSON.stringify(await names()) === JSON.stringify(nameList) && await p.locator(".client.dragging").count() === 0);
+
+await grab(1);
+await dragOver(3);
+await p.mouse.up();
+const afterDrag = await names();
+check("dragging the grip moves a card", afterDrag[2] === nameList[0] && afterDrag[0] === nameList[1] && afterDrag[1] === nameList[2], afterDrag.join(", "));
+check("dragging starts no timer", (await p.$$(".toggle.stop")).length === 0);
+await p.click(".client:first-child .client-grip");
+check("a click on the grip does nothing", JSON.stringify(await names()) === JSON.stringify(afterDrag) && (await p.$$(".toggle.stop")).length === 0);
+await p.reload();
+await p.waitForSelector(".client");
+check("the order survives a reload", JSON.stringify(await names()) === JSON.stringify(afterDrag));
+const rowsInOrder = await p.$$eval("#summary tbody .client-row td:first-child", (n) => n.map((x) => x.textContent.trim()));
+check("the summary follows the cards", JSON.stringify(rowsInOrder) === JSON.stringify(afterDrag.filter((n) => rowsInOrder.includes(n))), rowsInOrder.join(", "));
+if (SHOTS) await p.screenshot({ path: `${SHOTS}/demo-move-390.png` });
+
+// On a phone, through real touch events, with a list longer than the screen.
+const phone = await browser.newContext({ viewport: { width: 390, height: 560 }, hasTouch: true, isMobile: true, timezoneId: "America/Vancouver" });
+const t = await phone.newPage();
+t.on("pageerror", (e) => errors.push(`phone: ${e.message}`));
+t.on("dialog", (d) => d.accept());
+await t.goto(`${BASE}/`, { waitUntil: "networkidle" });
+const cdp = await phone.newCDPSession(t);
+const touch = (type, x, y) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y }] });
+const phoneNames = await names(t);
+await t.locator(".client:first-child .client-grip").scrollIntoViewIfNeeded();
+const grip = await t.locator(".client:first-child .client-grip").boundingBox();
+const x = grip.x + grip.width / 2;
+await touch("touchStart", x, grip.y + grip.height / 2);
+for (let y = grip.y; y < 520; y += 30) {
+  await touch("touchMove", x, y);
+  await t.waitForTimeout(16);
+}
+await touch("touchMove", x, 540);
+const scrollBefore = await t.evaluate(() => scrollY);
+await t.waitForTimeout(900);
+check("holding a drag near the edge scrolls the page", await t.evaluate(() => scrollY) > scrollBefore, `${scrollBefore} -> ${await t.evaluate(() => scrollY)}`);
+await touch("touchEnd");
+const phoneAfter = await names(t);
+check("a touch drag moves a card past the screen's edge", phoneAfter.indexOf(phoneNames[0]) >= 2 && phoneAfter.length === phoneNames.length, phoneAfter.join(", "));
+check("a touch drag starts no timer", (await t.$$(".toggle.stop")).length === 0);
+await phone.close();
+
 /* ---------- the review page ---------- */
 
 await p.click(".demo-bar a[href='/review.html']");
@@ -123,6 +201,19 @@ if (REAL) {
   check("the real build has no tracker and keeps its privacy text", !/a\/s\.js|nodemo/.test(realHtml) && /No account, no ads, no analytics/.test(realHtml));
   await real.goto(`${REAL}/review.html`);
   check("the real review page has no demo banner", !(await real.$(".demo-bar")));
+  await real.goto(`${REAL}/`);
+  const add = async (name) => {
+    await real.fill("#client-name", name);
+    await real.click("#add-client button");
+  };
+  await add("First");
+  check("the real build has nothing to move with one client", await real.locator(".client-move").count() === 0);
+  await add("Second");
+  await real.click(".client:first-child [data-move=down]");
+  check("the real build moves cards too", (await names(real)).join() === "Second,First");
+  await real.reload();
+  await real.waitForSelector(".client");
+  check("and keeps the order", (await names(real)).join() === "Second,First");
 }
 
 await browser.close();

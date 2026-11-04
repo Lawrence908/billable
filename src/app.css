@@ -158,6 +158,25 @@ input:focus-visible, select:focus-visible, .btn:focus-visible {
   background: linear-gradient(90deg, var(--run-dim), var(--surface) 70%);
 }
 .client-name { font-weight: 600; overflow-wrap: anywhere; }
+
+/* Moving a card: a grip with an arrow each side, top centre, where a missed
+   press lands on nothing. Taken out of the card's grid because the phone layout
+   places its rows by number. */
+.client.movable { position: relative; padding-top: 1.7rem; }
+.client-move { position: absolute; top: 0; left: 50%; transform: translateX(-50%); display: flex; align-items: stretch; height: 1.8rem; }
+.client-move .btn { width: 2.75rem; padding: 0; background: transparent; border-color: transparent; color: var(--muted); font-size: 0.95rem; }
+.client-move .btn:hover:not(:disabled) { color: var(--ink); }
+.client-move .btn:disabled { opacity: 0.25; cursor: default; }
+.client-grip { display: flex; align-items: center; justify-content: center; width: 3.5rem; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.client-grip::before { content: ""; width: 1.9rem; height: 0.42rem; border-top: 2px solid var(--muted); border-bottom: 2px solid var(--muted); opacity: 0.75; }
+.client-grip:hover::before { border-color: var(--accent); opacity: 1; }
+.clients.reordering { user-select: none; -webkit-user-select: none; cursor: grabbing; }
+.clients.reordering .client { transition: transform 0.15s ease; }
+.clients.reordering .client-grip { cursor: grabbing; }
+.clients.reordering .client.dragging { transition: none; z-index: 2; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55); border-color: var(--accent); }
+.clients.reordering .client.dragging .client-grip::before { border-color: var(--accent); opacity: 1; }
+.client.flash { animation: flash 1.4s ease-out; }
+@media (prefers-reduced-motion: reduce) { .clients.reordering .client { transition: none; } .client.flash { animation: none; } }
 .client-meta { color: var(--muted); font-size: 0.8rem; }
 .client.running .client-meta { color: var(--run); }
 .client-time { font-size: 1.35rem; text-align: right; min-width: 5.5ch; }

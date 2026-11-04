@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  CATEGORIES, atTime, clock, csvFor, dayBounds, dayKey, endAfter, existingSessions, fmtHM, merge, normalise,
+  CATEGORIES, activeClients, moveClient, atTime, clock, csvFor, dayBounds, dayKey, endAfter, existingSessions, fmtHM, merge, normalise,
   noteSuggestions, pruneTombstones, retagClient, retagSession, roundQuarter, sameData, settleRunning, shiftDay,
   summaryRows, summaryText, toggleTimer, totalsFor, sheetRows, toTSV, timerNudges, timelineFor, LONG_RUN,
   lunchBreak, lunchRestarts, lastTag, optimizationRows, tagLabel,
@@ -580,3 +580,66 @@ test("lunch restarts a timer on the same change order, and merging keeps it", ()
   assert.deepEqual(live.map((s) => [s.co, s.note]), [["CO-0001", "Rework"]]);
   assert.equal(existingSessions(merge(st, state)).find((s) => s.end === null).co, "CO-0001");
 });
+
+const names = (st) => activeClients(st).map((c) => c.name);
+const threeClients = () => day([["a", "Acme"], ["b", "Bolt"], ["c", "Cedar"]], []);
+
+test("moving: cards keep the order they were added in until one is moved", () => {
+  const st = threeClients();
+  assert.deepEqual(names(st), ["Acme", "Bolt", "Cedar"]);
+  assert.equal("clientOrder" in st.settings, false);
+  assert.deepEqual(names(moveClient(st, "c", 0, 5)), ["Cedar", "Acme", "Bolt"]);
+  assert.deepEqual(names(moveClient(st, "a", 2, 5)), ["Bolt", "Cedar", "Acme"]);
+  assert.deepEqual(names(moveClient(st, "a", 1, 5)), ["Bolt", "Acme", "Cedar"]);
+});
+
+test("moving: stays in bounds, and a move to the same place changes nothing", () => {
+  const st = threeClients();
+  assert.equal(moveClient(st, "a", 0, 5), st);
+  assert.equal(moveClient(st, "a", -3, 5), st);
+  assert.equal(moveClient(st, "c", 9, 5), st);
+  assert.equal(moveClient(st, "nobody", 1, 5), st);
+  assert.deepEqual(names(moveClient(st, "a", 9, 5)), ["Bolt", "Cedar", "Acme"]);
+});
+
+test("moving: the order survives saving, and bad stored orders are ignored", () => {
+  const moved = moveClient(threeClients(), "c", 0, 5);
+  assert.equal(moved.settings.updated, 5);
+  assert.deepEqual(names(normalise(JSON.parse(JSON.stringify(moved)))), ["Cedar", "Acme", "Bolt"]);
+  const odd = normalise({ ...moved, settings: { ...moved.settings, clientOrder: ["c", "c", 7, null, "gone", "a"] } });
+  assert.deepEqual(odd.settings.clientOrder, ["c", "gone", "a"]);
+  assert.deepEqual(names(odd), ["Cedar", "Acme", "Bolt"]);
+  assert.equal("clientOrder" in normalise({ ...moved, settings: { ...moved.settings, clientOrder: "c,a" } }).settings, false);
+});
+
+test("moving: a client added later goes last, and one brought back keeps its place", () => {
+  const moved = moveClient(threeClients(), "c", 0, 5);
+  const more = normalise({ ...moved, clients: [...moved.clients, { id: "d", name: "Dune", archived: false, updated: 6 }] });
+  assert.deepEqual(names(more), ["Cedar", "Acme", "Bolt", "Dune"]);
+  const removed = normalise({ ...moved, clients: moved.clients.map((c) => (c.id === "a" ? { ...c, archived: true } : c)) });
+  assert.deepEqual(names(removed), ["Cedar", "Bolt"]);
+  assert.deepEqual(names(normalise({ ...removed, clients: removed.clients.map((c) => ({ ...c, archived: false })) })), ["Cedar", "Acme", "Bolt"]);
+});
+
+test("moving: the summary follows the cards, and archived clients with time come last", () => {
+  const key = "2026-10-28";
+  const st = day([["a", "Acme"], ["b", "Bolt", { archived: true }], ["c", "Cedar"]], [
+    ["s1", "a", at(key, "09:00"), at(key, "10:00")],
+    ["s2", "b", at(key, "10:00"), at(key, "11:00")],
+    ["s3", "c", at(key, "11:00"), at(key, "12:00")],
+  ]);
+  const now = at(key, "13:00");
+  assert.deepEqual(summaryRows(st, key, now).map((r) => r.client.name), ["Acme", "Bolt", "Cedar"]);
+  const moved = moveClient(st, "c", 0, 5);
+  assert.deepEqual(summaryRows(moved, key, now).map((r) => r.client.name), ["Cedar", "Acme", "Bolt"]);
+  assert.equal(summaryRows(moved, key, now).reduce((a, r) => a + r.hours, 0), 3);
+});
+
+test("moving: the newer order wins a merge, and merging in either direction agrees", () => {
+  const base = threeClients();
+  const older = moveClient(base, "c", 0, 5);
+  const newer = moveClient(base, "a", 2, 9);
+  assert.deepEqual(names(merge(older, newer)), ["Bolt", "Cedar", "Acme"]);
+  assert.equal(sameData(merge(older, newer), merge(newer, older)), true);
+});
+

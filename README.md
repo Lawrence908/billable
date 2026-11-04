@@ -51,6 +51,14 @@ implementation list, and it all goes on one sheet rather than the client's tab.
 - A time typed under Fix times is saved when you leave the box, press Enter, or pause
   for two seconds, so a two-digit minute like 30 is never cut off after its first digit.
 
+## Moving client cards
+
+Each card has a grip at the top centre with an arrow either side, on any list of two
+or more clients. Drag the grip, or press the arrows; a drag scrolls the page near the
+top or bottom of the window, and Esc cancels it. The Summary and the Fix times client
+list follow the same order. The order is part of your data: it goes into a backup and,
+with sync on, the newest order wins across devices. A transfer link leaves it behind.
+
 ## Day-to-day helpers
 
 - **Copy for Sheets**: each client in the summary has a copy button, because each

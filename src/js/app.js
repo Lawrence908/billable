@@ -9,7 +9,7 @@
 
 import {
   CATEGORIES, CO_CATEGORY, LUNCH_END, LUNCH_START, MAX_CO, activeClients, atTime, clientById, clientByName, clock, csvFor, dayBounds, dayKey, endAfter,
-  existingClients, existingSessions, fmtHM, fmtHMS, fmtHours, lastTag, lunchBreak, lunchRestarts, merge, newId, normalise, noteSuggestions,
+  existingClients, existingSessions, fmtHM, fmtHMS, fmtHours, lastTag, lunchBreak, lunchRestarts, merge, moveClient, newId, normalise, noteSuggestions,
   optimizationRows, prettyDay, retagClient, retagSession, runningFor, sheetRows, shiftDay, stopAt, summaryRows, summaryText, tagLabel,
   timelineFor, timerNudges, toTSV, toggleTimer, totalsFor,
 } from "./model.js";
@@ -728,13 +728,111 @@ function renderAddBox() {
   input.setAttribute("aria-label", input.placeholder);
 }
 
+/* ---------- moving cards ---------- */
+
+let movedLast = { id: null, until: 0 };
+
+function placeClient(clientId, to) {
+  state = moveClient(state, clientId, to, Date.now());
+  movedLast = { id: clientId, until: Date.now() + 1500 };
+  commit();
+  const list = activeClients(state);
+  $("move-status").textContent = `${clientById(state, clientId).name} moved to position ${list.findIndex((c) => c.id === clientId) + 1} of ${list.length}.`;
+}
+
+// The arrows: keeps the keyboard on the same arrow, or the other one at the end
+// of the list, and the card on screen.
+function nudgeClient(clientId, step) {
+  const to = activeClients(state).findIndex((c) => c.id === clientId) + step;
+  placeClient(clientId, to);
+  const card = $("clients").children[to];
+  const arrow = card.querySelector(`[data-move="${step < 0 ? "up" : "down"}"]`);
+  (arrow.disabled ? card.querySelector("[data-move]:not([disabled])") : arrow).focus({ preventScroll: true });
+  card.scrollIntoView({ block: "nearest" });
+}
+
+// The grip. Works from pointer events, because HTML drag and drop doesn't work
+// on phones. The card follows the pointer and the others slide out of its way;
+// nothing is saved until it is let go, and Esc puts it back.
+const DRAG_EDGE = 70; // this close to the top or bottom of the window, the page scrolls
+const DRAG_SCROLL = 14; // pixels per frame
+let drag = null;
+
+function startDrag(e, clientId) {
+  if (drag || !e.isPrimary || e.button !== 0) return;
+  e.preventDefault();
+  const grip = e.currentTarget;
+  const list = $("clients");
+  const cards = [...list.children];
+  const from = cards.indexOf(grip.closest(".client"));
+  const spots = cards.map((c) => {
+    const r = c.getBoundingClientRect();
+    return { top: r.top + scrollY, bottom: r.bottom + scrollY, middle: (r.top + r.bottom) / 2 + scrollY };
+  });
+  const self = spots[from];
+  const shift = self.bottom - self.top + (spots[1].top - spots[0].bottom); // its height and one gap
+  const startY = e.clientY + scrollY;
+  const stop = new AbortController();
+  drag = { to: from, y: e.clientY, frame: 0 };
+
+  const follow = () => {
+    const dy = Math.max(spots[0].top - self.top, Math.min(drag.y + scrollY - startY, spots[spots.length - 1].bottom - self.bottom));
+    const middle = self.middle + dy;
+    let to = from;
+    spots.forEach((s, i) => {
+      if (i < from && to === from && middle < s.middle) to = i;
+      if (i > from && middle > s.middle) to = i;
+    });
+    drag.to = to;
+    cards.forEach((c, i) => {
+      const y = i === from ? dy : i >= to && i < from ? shift : i > from && i <= to ? -shift : 0;
+      c.style.transform = y ? `translateY(${y}px)` : "";
+    });
+  };
+  const scroll = () => {
+    const box = list.getBoundingClientRect();
+    const step = drag.y < DRAG_EDGE && box.top < DRAG_EDGE ? -DRAG_SCROLL
+      : drag.y > innerHeight - DRAG_EDGE && box.bottom > innerHeight - DRAG_EDGE ? DRAG_SCROLL : 0;
+    if (step) {
+      scrollBy(0, step);
+      follow();
+    }
+    drag.frame = requestAnimationFrame(scroll);
+  };
+  const finish = (keep) => {
+    const { to, frame } = drag;
+    cancelAnimationFrame(frame);
+    stop.abort();
+    drag = null;
+    list.classList.remove("reordering");
+    if (keep && to !== from) placeClient(clientId, to);
+    else render();
+  };
+
+  grip.setPointerCapture(e.pointerId);
+  grip.addEventListener("pointermove", (m) => {
+    drag.y = m.clientY;
+    follow();
+  }, { signal: stop.signal });
+  grip.addEventListener("pointerup", () => finish(true), { signal: stop.signal });
+  grip.addEventListener("pointercancel", () => finish(false), { signal: stop.signal });
+  document.addEventListener("keydown", (k) => {
+    if (k.key === "Escape") finish(false);
+  }, { signal: stop.signal });
+  list.classList.add("reordering");
+  cards[from].classList.add("dragging");
+  drag.frame = requestAnimationFrame(scroll);
+}
+
 function renderClients(now) {
+  if (drag) return; // redrawing would pull the card out from under the pointer
   const today = dayKey(now);
   const per = totalsFor(state, today, now);
   const hours = new Map(summaryRows(state, today, now).map((r) => [r.client.id, r.hours]));
   const active = activeClients(state);
   $("clients-empty").hidden = active.length > 0;
-  $("clients").replaceChildren(...active.map((c) => {
+  const movable = active.length > 1;
+  $("clients").replaceChildren(...active.map((c, i) => {
     const running = runningFor(state, c.id);
     const ms = per.get(c.id) || 0;
     const open = expanded.has(c.id);
@@ -744,7 +842,12 @@ function renderClients(now) {
       ? el("div", { class: "client-meta" }, el("span", { class: "pulse", "aria-hidden": "true" }), `Running since ${clock(running.start)}`)
       : el("div", { class: "client-meta", text: ms ? `${fmtHours(hours.get(c.id) || 0)} h today` : "Not started today" });
     const panelId = `more-${c.id}`;
-    return el("li", { class: `client${running ? " running" : ""}${open ? " open" : ""}${onOrder ? " co" : ""}` },
+    const flash = movedLast.id === c.id && now < movedLast.until;
+    return el("li", { class: `client${running ? " running" : ""}${open ? " open" : ""}${onOrder ? " co" : ""}${movable ? " movable" : ""}${flash ? " flash" : ""}` },
+      movable ? el("div", { class: "client-move" },
+        el("button", { type: "button", class: "btn", "data-move": "up", "aria-label": `Move ${c.name} up`, title: "Move up", disabled: i === 0, onclick: () => nudgeClient(c.id, -1), text: "\u2191" }),
+        el("span", { class: "client-grip", title: "Drag to reorder", "aria-hidden": "true", onpointerdown: (e) => startDrag(e, c.id) }),
+        el("button", { type: "button", class: "btn", "data-move": "down", "aria-label": `Move ${c.name} down`, title: "Move down", disabled: i === active.length - 1, onclick: () => nudgeClient(c.id, 1), text: "\u2193" })) : null,
       el("div", {},
         el("div", { class: "client-name", text: c.name }),
         tag ? el("div", { class: "client-tag", title: "Time on this card goes to", text: tag }) : null,

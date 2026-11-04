@@ -45,6 +45,12 @@ function cleanTag(category, note, co) {
 // Stored only when there is one, so data without change orders serialises as it always has.
 const storedTag = ({ co, ...tag }) => (co ? { ...tag, co } : tag);
 
+// Stored only once a card has been moved, so other data serialises as it always has.
+function storedOrder(order) {
+  const ids = [...new Set(Array.isArray(order) ? order.filter((id) => typeof id === "string") : [])];
+  return ids.length ? { clientOrder: ids.slice(0, 2000) } : {};
+}
+
 // Time-prefixed, so sorting by id lists clients in the order they were added.
 export function newId(now = Date.now()) {
   const tail = Array.from(crypto.getRandomValues(new Uint8Array(5)), (b) => b.toString(36).padStart(2, "0")).join("");
@@ -114,6 +120,7 @@ export function normalise(d) {
       // On unless turned off, including for data saved before these existed.
       lunchStop: d.settings.lunchStop !== false,
       lunchRestart: d.settings.lunchRestart !== false,
+      ...storedOrder(d.settings.clientOrder),
       updated: when(d.settings.updated),
     };
   }
@@ -124,10 +131,19 @@ export const sameData = (a, b) => JSON.stringify(normalise(a)) === JSON.stringif
 
 /* ---------- queries ---------- */
 
+// The order the user moved the cards into, then any added since, oldest first.
+function inListOrder(st, clients) {
+  const order = st.settings.clientOrder;
+  if (!order) return clients;
+  const rank = new Map(order.map((id, i) => [id, i]));
+  const place = (c) => rank.get(c.id) ?? order.length;
+  return [...clients].sort((a, b) => place(a) - place(b));
+}
+
 // "Existing" means not deleted; it includes clients the user removed from the
 // list (archived), whose past hours still count. "Active" is what the list shows.
 export const existingClients = (st) => st.clients.filter((c) => !c.deleted);
-export const activeClients = (st) => existingClients(st).filter((c) => !c.archived);
+export const activeClients = (st) => inListOrder(st, existingClients(st).filter((c) => !c.archived));
 export const clientById = (st, id) => existingClients(st).find((c) => c.id === id);
 export const clientByName = (st, name) => {
   const folded = name.toLowerCase();
@@ -140,6 +156,18 @@ export const clientByName = (st, name) => {
 export function existingSessions(st) {
   const ids = new Set(existingClients(st).map((c) => c.id));
   return st.sessions.filter((s) => !s.deleted && ids.has(s.clientId));
+}
+
+// Moves a client to a position in the list. The whole order lives in the
+// settings, so when two devices reorder apart, the newer order wins.
+export function moveClient(st, clientId, to, now) {
+  const ids = activeClients(st).map((c) => c.id);
+  const from = ids.indexOf(clientId);
+  const place = Math.max(0, Math.min(to, ids.length - 1));
+  if (from < 0 || place === from) return st;
+  ids.splice(from, 1);
+  ids.splice(place, 0, clientId);
+  return { ...st, settings: { ...st.settings, clientOrder: ids, updated: now } };
 }
 
 export const runningFor = (st, clientId) => existingSessions(st).find((s) => s.clientId === clientId && s.end === null);
@@ -249,7 +277,7 @@ export function summaryRows(st, key, now) {
     if (!lines.has(k)) lines.set(k, { category: s.category, co, note: s.note, ms: 0 });
     lines.get(k).ms += ms;
   }
-  return existingClients(st)
+  return inListOrder(st, existingClients(st))
     .filter((c) => perClient.has(c.id))
     .map((c) => {
       const lines = [...perClient.get(c.id).values()]
